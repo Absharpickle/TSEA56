@@ -1,26 +1,33 @@
-#include <avr/io.h>
-#include <avr/interrupt.h>
+#include <stdio.h>
 
-#define SLAVE_ADDRESS 0x11
+// Definiera denna för att köra i "Simuleringsläge"
+#define SIMULATE_I2C 
 
-void TWI_init_slave(void) {
-    // 1. Sätt slavens adress i TWAR-registret
-    TWAR = (SLAVE_ADDRESS << 1); 
-    
-    // 2. Konfigurera kontrollregistret (TWCR)
-    // TWEN: Aktivera TWI
-    // TWEA: Enable Acknowledge (svara med ACK på vår adress)
-    TWCR = (1<<TWEN) | (1<<TWEA);
-}
+#ifdef SIMULATE_I2C
+    // Vi "skuggar" de riktiga funktionerna
+    int open(const char *path, int flags) { return 99; } // Returnera ett fejk-id
+    int ioctl(int fd, unsigned long req, ...) { return 0; }
+    int close(int fd) { return 0; }
 
-// Enkel funktion för att skicka en byte när Master efterfrågar det
-void TWI_transmit_byte(uint8_t data) {
-    // Vänta på att TWINT sätts (Master vill läsa)
-    while (!(TWCR & (1<<TWINT)));
-    
-    // Ladda data i dataregistret
-    TWDR = data;
-    
-    // Starta överföring
-    TWCR = (1<<TWINT) | (1<<TWEN);
+    ssize_t write(int fd, const void *buf, size_t count) {
+        printf("[SIM] Master skrev register: 0x%02X\n", ((unsigned char*)buf)[0]);
+        return count;
+    }
+
+    ssize_t read(int fd, void *buf, size_t count) {
+        ((unsigned char*)buf)[0] = 0xAA; // Här skickar vi tillbaka vårt "ATmega-svar"
+        printf("[SIM] Master läste värde: 0x%02X\n", ((unsigned char*)buf)[0]);
+        return count;
+    }
+#else
+    #include <fcntl.h>
+    #include <unistd.h>
+    #include <sys/ioctl.h>
+    #include <linux/i2c-dev.h>
+#endif
+
+int main() {
+    // Din kod här... (den kommer nu använda fusk-funktionerna ovan)
+    // ... samma kod som du skrev tidigare ...
+    printf("Data received: 0x%02X\n", buffer[0]);
 }
