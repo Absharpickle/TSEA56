@@ -20,7 +20,8 @@ int main() {
             
             // --- STEG 2: OM LÄSNING LYCKADES, SKICKA VIDARE TILL MOTTAGARE ---
             ioctl(file, I2C_SLAVE, 0x12);
-            if (write(file, buffer, 8) == 8) {
+            ssize_t bytes_written = write(file, buf, 8);
+            if (bytes_written == 8) {
                 printf("Paket dirigerat framgångsrikt!\n");
             } else {
                 printf("Kunde läsa från sensor, men mottagaren svarade inte (NACK).\n");

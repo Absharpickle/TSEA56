@@ -3,31 +3,31 @@ sensor_i2c.elf:     file format elf32-avr
 
 Sections:
 Idx Name          Size      VMA       LMA       File off  Algn
-  0 .data         00000008  00800100  0000017e  00000212  2**0
+  0 .data         00000008  00800100  0000015e  000001f2  2**0
                   CONTENTS, ALLOC, LOAD, DATA
-  1 .text         0000017e  00000000  00000000  00000094  2**1
+  1 .text         0000015e  00000000  00000000  00000094  2**1
                   CONTENTS, ALLOC, LOAD, READONLY, CODE
-  2 .bss          00000001  00800108  00800108  0000021a  2**0
+  2 .bss          00000001  00800108  00800108  000001fa  2**0
                   ALLOC
-  3 .comment      00000030  00000000  00000000  0000021a  2**0
+  3 .comment      00000030  00000000  00000000  000001fa  2**0
                   CONTENTS, READONLY
-  4 .note.gnu.avr.deviceinfo 00000040  00000000  00000000  0000024c  2**2
+  4 .note.gnu.avr.deviceinfo 00000040  00000000  00000000  0000022c  2**2
                   CONTENTS, READONLY
-  5 .debug_aranges 00000030  00000000  00000000  0000028c  2**0
+  5 .debug_aranges 00000030  00000000  00000000  0000026c  2**0
                   CONTENTS, READONLY, DEBUGGING
-  6 .debug_info   000008ad  00000000  00000000  000002bc  2**0
+  6 .debug_info   000008ad  00000000  00000000  0000029c  2**0
                   CONTENTS, READONLY, DEBUGGING
-  7 .debug_abbrev 000007f7  00000000  00000000  00000b69  2**0
+  7 .debug_abbrev 000007f7  00000000  00000000  00000b49  2**0
                   CONTENTS, READONLY, DEBUGGING
-  8 .debug_line   0000029d  00000000  00000000  00001360  2**0
+  8 .debug_line   00000287  00000000  00000000  00001340  2**0
                   CONTENTS, READONLY, DEBUGGING
-  9 .debug_frame  00000060  00000000  00000000  00001600  2**2
+  9 .debug_frame  00000060  00000000  00000000  000015c8  2**2
                   CONTENTS, READONLY, DEBUGGING
- 10 .debug_str    00000415  00000000  00000000  00001660  2**0
+ 10 .debug_str    00000415  00000000  00000000  00001628  2**0
                   CONTENTS, READONLY, DEBUGGING
- 11 .debug_loc    0000008a  00000000  00000000  00001a75  2**0
+ 11 .debug_loc    00000074  00000000  00000000  00001a3d  2**0
                   CONTENTS, READONLY, DEBUGGING
- 12 .debug_ranges 00000020  00000000  00000000  00001aff  2**0
+ 12 .debug_ranges 00000020  00000000  00000000  00001ab1  2**0
                   CONTENTS, READONLY, DEBUGGING
 
 Disassembly of section .text:
@@ -116,7 +116,7 @@ Disassembly of section .text:
   98:	11 e0       	ldi	r17, 0x01	; 1
   9a:	a0 e0       	ldi	r26, 0x00	; 0
   9c:	b1 e0       	ldi	r27, 0x01	; 1
-  9e:	ee e7       	ldi	r30, 0x7E	; 126
+  9e:	ee e5       	ldi	r30, 0x5E	; 94
   a0:	f1 e0       	ldi	r31, 0x01	; 1
   a2:	00 e0       	ldi	r16, 0x00	; 0
   a4:	0b bf       	out	0x3b, r16	; 59
@@ -140,14 +140,14 @@ Disassembly of section .text:
   bc:	a9 30       	cpi	r26, 0x09	; 9
   be:	b2 07       	cpc	r27, r18
   c0:	e1 f7       	brne	.-8      	; 0xba <.do_clear_bss_loop>
-  c2:	59 d0       	rcall	.+178    	; 0x176 <main>
-  c4:	5a c0       	rjmp	.+180    	; 0x17a <_exit>
+  c2:	49 d0       	rcall	.+146    	; 0x156 <main>
+  c4:	4a c0       	rjmp	.+148    	; 0x15a <_exit>
 
 000000c6 <__bad_interrupt>:
   c6:	9c cf       	rjmp	.-200    	; 0x0 <__vectors>
 
 000000c8 <TWI_init_slave>:
-// Datan vi simulerar från tabellen (8 bytes)
+#define SLAVE_ADDRESS 0x11
 volatile uint8_t tx_buffer[8] = {0x05, 0xF1, 0xFF, 0x14, 0x00, 35, 0x01, 0xFF};
 volatile uint8_t tx_index = 0;
 
@@ -155,18 +155,16 @@ void TWI_init_slave(void) {
 	TWAR = (SLAVE_ADDRESS << 1);
   c8:	82 e2       	ldi	r24, 0x22	; 34
   ca:	80 93 ba 00 	sts	0x00BA, r24	; 0x8000ba <__TEXT_REGION_LENGTH__+0x7e00ba>
-	// Aktivera TWI, svara med ACK, och aktivera INTERRUPTS (TWIE)
 	TWCR = (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
   ce:	85 e4       	ldi	r24, 0x45	; 69
   d0:	80 93 bc 00 	sts	0x00BC, r24	; 0x8000bc <__TEXT_REGION_LENGTH__+0x7e00bc>
-	sei(); // Aktivera globala avbrott
+	sei();
   d4:	78 94       	sei
   d6:	08 95       	ret
 
 000000d8 <__vector_26>:
 }
 
-// Denna funktion triggas automatiskt av hårdvaran när Raspberry Pi vill prata!
 ISR(TWI_vect) {
   d8:	1f 92       	push	r1
   da:	0f 92       	push	r0
@@ -182,13 +180,12 @@ ISR(TWI_vect) {
   ec:	80 91 b9 00 	lds	r24, 0x00B9	; 0x8000b9 <__TEXT_REGION_LENGTH__+0x7e00b9>
   f0:	88 7f       	andi	r24, 0xF8	; 248
 
-	if (status == 0xA8) {
+	if (status == 0xA8) { // Master vill LÄSA
   f2:	88 3a       	cpi	r24, 0xA8	; 168
-  f4:	91 f4       	brne	.+36     	; 0x11a <__vector_26+0x42>
-		// 0xA8: Master vill LÄSA från oss (SLA+R mottagen)
+  f4:	79 f4       	brne	.+30     	; 0x114 <__vector_26+0x3c>
 		tx_index = 0;
   f6:	10 92 08 01 	sts	0x0108, r1	; 0x800108 <__data_end>
-		TWDR = tx_buffer[tx_index++]; // Ladda första byten i dataregistret
+		TWDR = tx_buffer[tx_index++];
   fa:	e0 91 08 01 	lds	r30, 0x0108	; 0x800108 <__data_end>
   fe:	81 e0       	ldi	r24, 0x01	; 1
  100:	8e 0f       	add	r24, r30
@@ -198,79 +195,51 @@ ISR(TWI_vect) {
  10a:	ff 4f       	sbci	r31, 0xFF	; 255
  10c:	80 81       	ld	r24, Z
  10e:	80 93 bb 00 	sts	0x00BB, r24	; 0x8000bb <__TEXT_REGION_LENGTH__+0x7e00bb>
-		
-		// Rensa flaggan och behåll TWIE (Interrupt Enable) aktivt
-		TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
- 112:	85 ec       	ldi	r24, 0xC5	; 197
- 114:	80 93 bc 00 	sts	0x00BC, r24	; 0x8000bc <__TEXT_REGION_LENGTH__+0x7e00bc>
- 118:	24 c0       	rjmp	.+72     	; 0x162 <__vector_26+0x8a>
+ 112:	14 c0       	rjmp	.+40     	; 0x13c <__vector_26+0x64>
+		} else if (status == 0xB8) { // Master vill ha NÄSTA byte
+ 114:	88 3b       	cpi	r24, 0xB8	; 184
+ 116:	91 f4       	brne	.+36     	; 0x13c <__vector_26+0x64>
+		TWDR = (tx_index < 8) ? tx_buffer[tx_index++] : 0x00;
+ 118:	80 91 08 01 	lds	r24, 0x0108	; 0x800108 <__data_end>
+ 11c:	88 30       	cpi	r24, 0x08	; 8
+ 11e:	58 f4       	brcc	.+22     	; 0x136 <__vector_26+0x5e>
+ 120:	e0 91 08 01 	lds	r30, 0x0108	; 0x800108 <__data_end>
+ 124:	81 e0       	ldi	r24, 0x01	; 1
+ 126:	8e 0f       	add	r24, r30
+ 128:	80 93 08 01 	sts	0x0108, r24	; 0x800108 <__data_end>
+ 12c:	f0 e0       	ldi	r31, 0x00	; 0
+ 12e:	e0 50       	subi	r30, 0x00	; 0
+ 130:	ff 4f       	sbci	r31, 0xFF	; 255
+ 132:	80 81       	ld	r24, Z
+ 134:	01 c0       	rjmp	.+2      	; 0x138 <__vector_26+0x60>
+ 136:	80 e0       	ldi	r24, 0x00	; 0
+ 138:	80 93 bb 00 	sts	0x00BB, r24	; 0x8000bb <__TEXT_REGION_LENGTH__+0x7e00bb>
 	}
-	else if (status == 0xB8) {
- 11a:	88 3b       	cpi	r24, 0xB8	; 184
- 11c:	b9 f4       	brne	.+46     	; 0x14c <__vector_26+0x74>
-		// 0xB8: Data har skickats, Master svarade ACK och vill ha NÄSTA byte
-		if (tx_index < 8) {
- 11e:	80 91 08 01 	lds	r24, 0x0108	; 0x800108 <__data_end>
- 122:	88 30       	cpi	r24, 0x08	; 8
- 124:	68 f4       	brcc	.+26     	; 0x140 <__vector_26+0x68>
-			TWDR = tx_buffer[tx_index++];
- 126:	e0 91 08 01 	lds	r30, 0x0108	; 0x800108 <__data_end>
- 12a:	81 e0       	ldi	r24, 0x01	; 1
- 12c:	8e 0f       	add	r24, r30
- 12e:	80 93 08 01 	sts	0x0108, r24	; 0x800108 <__data_end>
- 132:	f0 e0       	ldi	r31, 0x00	; 0
- 134:	e0 50       	subi	r30, 0x00	; 0
- 136:	ff 4f       	sbci	r31, 0xFF	; 255
- 138:	80 81       	ld	r24, Z
- 13a:	80 93 bb 00 	sts	0x00BB, r24	; 0x8000bb <__TEXT_REGION_LENGTH__+0x7e00bb>
- 13e:	02 c0       	rjmp	.+4      	; 0x144 <__vector_26+0x6c>
-			} else {
-			TWDR = 0x00; // Skicka nollor om Master begär fler än 8 bytes
- 140:	10 92 bb 00 	sts	0x00BB, r1	; 0x8000bb <__TEXT_REGION_LENGTH__+0x7e00bb>
-		}
-		TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
- 144:	85 ec       	ldi	r24, 0xC5	; 197
- 146:	80 93 bc 00 	sts	0x00BC, r24	; 0x8000bc <__TEXT_REGION_LENGTH__+0x7e00bc>
- 14a:	0b c0       	rjmp	.+22     	; 0x162 <__vector_26+0x8a>
-	}
-	else if (status == 0xC0 || status == 0xC8) {
- 14c:	80 3c       	cpi	r24, 0xC0	; 192
- 14e:	11 f0       	breq	.+4      	; 0x154 <__vector_26+0x7c>
- 150:	88 3c       	cpi	r24, 0xC8	; 200
- 152:	21 f4       	brne	.+8      	; 0x15c <__vector_26+0x84>
-		// 0xC0: Data skickad, NACK mottaget (Raspberry Pi har fått det den vill ha och stänger)
-		TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
- 154:	85 ec       	ldi	r24, 0xC5	; 197
- 156:	80 93 bc 00 	sts	0x00BC, r24	; 0x8000bc <__TEXT_REGION_LENGTH__+0x7e00bc>
- 15a:	03 c0       	rjmp	.+6      	; 0x162 <__vector_26+0x8a>
-	}
-	else {
-		// Återställ bussen vid andra oförutsedda tillstånd
-		TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
- 15c:	85 ec       	ldi	r24, 0xC5	; 197
- 15e:	80 93 bc 00 	sts	0x00BC, r24	; 0x8000bc <__TEXT_REGION_LENGTH__+0x7e00bc>
-	}
+	// ALLA andra tillstånd (inklusive 0xC0 NACK och fel) ska nollställa flaggan:
+	TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
+ 13c:	85 ec       	ldi	r24, 0xC5	; 197
+ 13e:	80 93 bc 00 	sts	0x00BC, r24	; 0x8000bc <__TEXT_REGION_LENGTH__+0x7e00bc>
 }
- 162:	ff 91       	pop	r31
- 164:	ef 91       	pop	r30
- 166:	8f 91       	pop	r24
- 168:	0f 90       	pop	r0
- 16a:	0b be       	out	0x3b, r0	; 59
- 16c:	0f 90       	pop	r0
- 16e:	0f be       	out	0x3f, r0	; 63
- 170:	0f 90       	pop	r0
- 172:	1f 90       	pop	r1
- 174:	18 95       	reti
+ 142:	ff 91       	pop	r31
+ 144:	ef 91       	pop	r30
+ 146:	8f 91       	pop	r24
+ 148:	0f 90       	pop	r0
+ 14a:	0b be       	out	0x3b, r0	; 59
+ 14c:	0f 90       	pop	r0
+ 14e:	0f be       	out	0x3f, r0	; 63
+ 150:	0f 90       	pop	r0
+ 152:	1f 90       	pop	r1
+ 154:	18 95       	reti
 
-00000176 <main>:
+00000156 <main>:
 
 int main(void) {
 	TWI_init_slave();
- 176:	a8 df       	rcall	.-176    	; 0xc8 <TWI_init_slave>
- 178:	ff cf       	rjmp	.-2      	; 0x178 <main+0x2>
+ 156:	b8 df       	rcall	.-144    	; 0xc8 <TWI_init_slave>
+ 158:	ff cf       	rjmp	.-2      	; 0x158 <main+0x2>
 
-0000017a <_exit>:
- 17a:	f8 94       	cli
+0000015a <_exit>:
+ 15a:	f8 94       	cli
 
-0000017c <__stop_program>:
- 17c:	ff cf       	rjmp	.-2      	; 0x17c <__stop_program>
+0000015c <__stop_program>:
+ 15c:	ff cf       	rjmp	.-2      	; 0x15c <__stop_program>
