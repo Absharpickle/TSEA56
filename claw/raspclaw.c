@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -9,32 +10,30 @@
 
 #define SLAVE_ADDRESS 0x12
 
-// Funktion för att läsa tangenttryckningar utan att trycka Enter
-int kbhit(void) {
-    struct termios oldt, newt;
-    int ch;
-    int oldf;
+// =================================================================
+// TERMINAL-HANTERING (RAW MODE) FÖR PILTANGENTER
+// =================================================================
+struct termios orig_termios;
 
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-    oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
-    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
-
-    ch = getchar();
-
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-    fcntl(STDIN_FILENO, F_SETFL, oldf);
-
-    if (ch != EOF) {
-        ungetc(ch, stdin);
-        return 1;
-    }
-    return 0;
+void disable_raw_mode() {
+    // Återställ terminalen till normalt läge när programmet avslutas
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
 }
 
-// Funktion för att skriva status till fil
+void enable_raw_mode() {
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(disable_raw_mode); // Se till att disable_raw_mode körs vid exit
+    
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ECHO | ICANON); // Stäng av text-eko och krav på "Enter"
+    raw.c_cc[VMIN] = 0;              // Läs direkt (non-blocking)
+    raw.c_cc[VTIME] = 0;             // Ingen timeout
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+}
+
+// =================================================================
+// HJÄLPFUNKTIONER
+// =================================================================
 void spara_status_till_fil(uint8_t* status_data) {
     FILE *f = fopen("klo_status.txt", "w");
     if (f == NULL) return;
@@ -46,13 +45,16 @@ void spara_status_till_fil(uint8_t* status_data) {
     fprintf(f, "Rotation:   %d\n", (int8_t)status_data[4]);
     fprintf(f, "Klo-status: %s\n", (status_data[5] == 1) ? "Stängd" : "Öppen");
     fclose(f);
-    printf("Status sparad till 'klo_status.txt'\n");
+    printf("\n\rStatus sparad till 'klo_status.txt'\n\r");
 }
 
+// =================================================================
+// HUVUDPROGRAM
+// =================================================================
 int main() {
     int file;
     if ((file = open("/dev/i2c-1", O_RDWR)) < 0) {
-        printf("Fel: Kunde inte öppna I2C.\n");
+        printf("Fel: Kunde inte öppna I2C-bussen.\n");
         return 1;
     }
 
@@ -60,21 +62,26 @@ int main() {
     bool manuellt_lage_aktivt = false;
     int aktuellt_lage = 1; // Standardläge: 1 (X/Y)
 
-    printf("--- MANUELL KONTROLL (raspclaw) ---\n");
-    printf("Tryck [SPACE] för att starta/avsluta manuellt läge.\n");
+    // Sätt terminalen i Raw Mode för att fånga piltangenterna perfekt
+    enable_raw_mode();
 
+    // Notera: I Raw Mode använder vi \r\n istället för bara \n för snygg radbrytning
+    printf("--- MANUELL KONTROLL (raspclaw) ---\n\r");
+    printf("Tryck [SPACE] för att starta/avsluta manuellt läge.\n\r");
+
+    char c;
     while (1) {
-        if (kbhit()) {
-            int key = getchar();
-
+        // Läs in EN byte från tangentbordet
+        if (read(STDIN_FILENO, &c, 1) == 1) {
+            
             // --- Hantera SPACE (Starta/Avsluta) ---
-            if (key == ' ') {
+            if (c == ' ') {
                 manuellt_lage_aktivt = !manuellt_lage_aktivt;
                 if (manuellt_lage_aktivt) {
-                    printf("\n[MANUELLT LÄGE AKTIVERAT]\n");
-                    printf("LÄGE 1: X/Y (Pilar)\n");
+                    printf("\n\r[MANUELLT LÄGE AKTIVERAT]\n\r");
+                    printf("LÄGE 1: X/Y (Pilar)\n\r");
                 } else {
-                    printf("\n[MANUELLT LÄGE AVSLUTAT] Hämtar status...\n");
+                    printf("\n\r[MANUELLT LÄGE AVSLUTAT] Hämtar status...\n\r");
                     
                     // Skicka kommando 5 för att be om status
                     buffer_out[1] = 5; 
@@ -83,62 +90,67 @@ int main() {
                     
                     usleep(10000); // Ge AVR tid att byta till TX-läge
                     
-                    uint8_t status_in[8];
+                    uint8_t status_in[8] = {0};
                     if (read(file, status_in, 8) == 8) {
                         spara_status_till_fil(status_in);
                     } else {
-                        printf("Kunde inte läsa status från AVR.\n");
+                        printf("Kunde inte läsa status från AVR.\n\r");
                     }
-                    break; // Avsluta programmet
+                    break; // Avsluta while-loopen och programmet
                 }
             }
 
             if (!manuellt_lage_aktivt) continue;
 
             // --- Byta läge (1, 2, 3, 4) ---
-            if (key == '1') { aktuellt_lage = 1; printf("LÄGE 1: X/Y-styrning\n"); }
-            if (key == '2') { aktuellt_lage = 2; printf("LÄGE 2: Vippa (Upp/Ned)\n"); }
-            if (key == '3') { aktuellt_lage = 3; printf("LÄGE 3: Rotation (Vänster/Höger)\n"); }
-            if (key == '4') { aktuellt_lage = 4; printf("LÄGE 4: Gripklo (Upp=Grip, Ned=Släpp)\n"); }
+            if (c == '1') { aktuellt_lage = 1; printf("LÄGE 1: X/Y-styrning\n\r"); }
+            if (c == '2') { aktuellt_lage = 2; printf("LÄGE 2: Vippa (Upp/Ned)\n\r"); }
+            if (c == '3') { aktuellt_lage = 3; printf("LÄGE 3: Rotation (Vänster/Höger)\n\r"); }
+            if (c == '4') { aktuellt_lage = 4; printf("LÄGE 4: Gripklo (Upp=Grip, Ned=Släpp)\n\r"); }
 
-            // --- Hantera piltangenter (Esc-sekvenser i Linux: 27, 91, [65-68]) ---
-            if (key == 27) { 
-                getchar(); // Fånga '['
-                int arrow = getchar(); // Fånga 'A' (Upp), 'B' (Ned), 'C' (Höger), 'D' (Vänster)
+            // --- Hantera piltangenter (Escape-sekvens: \x1b -> [ -> A/B/C/D) ---
+            if (c == '\x1b') { 
+                char seq[2];
+                // Läs de nästkommande 2 byten ( [ och Bokstaven )
+                if (read(STDIN_FILENO, &seq[0], 1) == 1 && read(STDIN_FILENO, &seq[1], 1) == 1) {
+                    if (seq[0] == '[') {
+                        char arrow = seq[1];
 
-                buffer_out[1] = aktuellt_lage; // Vilket system vill vi styra?
-                buffer_out[2] = 0; // Återställ värde
+                        buffer_out[1] = aktuellt_lage; // Vilket system vill vi styra?
+                        buffer_out[2] = 0; // Återställ värde
 
-                if (aktuellt_lage == 1) { // X/Y
-                    if (arrow == 'A') buffer_out[2] = 1;       // +Y (Upp)
-                    else if (arrow == 'B') buffer_out[2] = -1; // -Y (Ned)
-                    else if (arrow == 'C') buffer_out[2] = 2;  // +X (Höger) (Använder '2' för att skilja på Y och X)
-                    else if (arrow == 'D') buffer_out[2] = -2; // -X (Vänster)
-                }
-                else if (aktuellt_lage == 2) { // Vippa
-                    if (arrow == 'A') buffer_out[2] = 1;       // Upp
-                    else if (arrow == 'B') buffer_out[2] = -1; // Ned
-                }
-                else if (aktuellt_lage == 3) { // Rotation
-                    if (arrow == 'C') buffer_out[2] = 1;       // + (Höger)
-                    else if (arrow == 'D') buffer_out[2] = -1; // - (Vänster)
-                }
-                else if (aktuellt_lage == 4) { // Gripklo
-                    if (arrow == 'A') buffer_out[2] = 1;       // Grip (Upp)
-                    else if (arrow == 'B') buffer_out[2] = 0;  // Släpp (Ned)
-                }
+                        if (aktuellt_lage == 1) { // X/Y
+                            if (arrow == 'A') buffer_out[2] = 1;       // +Y (Upp)
+                            else if (arrow == 'B') buffer_out[2] = -1; // -Y (Ned)
+                            else if (arrow == 'C') buffer_out[2] = 2;  // +X (Höger)
+                            else if (arrow == 'D') buffer_out[2] = -2; // -X (Vänster)
+                        }
+                        else if (aktuellt_lage == 2) { // Vippa
+                            if (arrow == 'A') buffer_out[2] = 1;       // Upp
+                            else if (arrow == 'B') buffer_out[2] = -1; // Ned
+                        }
+                        else if (aktuellt_lage == 3) { // Rotation
+                            if (arrow == 'C') buffer_out[2] = 1;       // + (Höger)
+                            else if (arrow == 'D') buffer_out[2] = -1; // - (Vänster)
+                        }
+                        else if (aktuellt_lage == 4) { // Gripklo
+                            if (arrow == 'A') buffer_out[2] = 1;       // Grip (Upp)
+                            else if (arrow == 'B') buffer_out[2] = 0;  // Släpp (Ned)
+                        }
 
-                // Skicka paketet om en pil trycktes
-                if (arrow >= 'A' && arrow <= 'D') {
-                    ioctl(file, I2C_SLAVE, SLAVE_ADDRESS);
-                    write(file, buffer_out, 8);
-                    // printf("Skickade Kommando: Läge %d, Värde %d\n", buffer_out[1], (int8_t)buffer_out[2]);
+                        // Skicka paketet till AVR
+                        ioctl(file, I2C_SLAVE, SLAVE_ADDRESS);
+                        write(file, buffer_out, 8);
+                        
+                        // Avkommentera raden nedan om du vill se en utskrift varje gång du klickar på en pil
+                        // printf("-> Skickade Kommando: Läge %d, Värde %d\n\r", buffer_out[1], (int8_t)buffer_out[2]);
+                    }
                 }
             }
         }
-        usleep(10000); // 10ms CPU-vila
+        usleep(10000); // 10ms CPU-vila (Minskar CPU-användningen till nästan noll)
     }
 
     close(file);
-    return 0;
+    return 0; // Raw mode stängs automatiskt av här tack vare atexit()
 }
