@@ -1,69 +1,96 @@
-#define F_CPU 8000000UL // Viktigt för _delay_ms om du kör 8 MHz
+#define F_CPU 8000000UL // Körs i 8 MHz
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <util/delay.h>
 
-#define SLAVE_ADDRESS 0x11
+#define SLAVE_ADDRESS 0x12
 
-// Initialt standardpaket
-volatile uint8_t tx_buffer[8] = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xFF};
-volatile uint8_t tx_index = 0;
+volatile uint8_t rx_buffer[8];
+volatile uint8_t rx_index = 0;
+volatile uint8_t nytt_paket_mottaget = 0; // Flagga för main-loopen
 
 void TWI_init_slave(void) {
     TWAR = (SLAVE_ADDRESS << 1); 
-    TWCR = (1<<TWEN) | (1<<TWEA) | (1<<TWIE); 
+    TWCR = (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
     sei(); 
 }
 
 ISR(TWI_vect) {
     uint8_t status = TWSR & 0xF8;
 
-    if (status == 0xA8) { // Master vill LÄSA
-        tx_index = 0;
-        TWDR = tx_buffer[tx_index++];
-    } else if (status == 0xB8) { // Master vill ha NÄSTA byte
-        TWDR = (tx_index < 8) ? tx_buffer[tx_index++] : 0x00;
-    } 
+    if (status == 0x60) { // Master (Pi) vill SKRIVA
+        rx_index = 0;
+    } else if (status == 0x80) { // Master har skickat en byte
+        if (rx_index < 8) {
+            rx_buffer[rx_index++] = TWDR;
+        }
+    } else if (status == 0xA0) { // STOPP-signal från Master
+        nytt_paket_mottaget = 1; // Nu har vi ett helt paket att analysera!
+    }
+    
+    // Nollställ I2C-hårdvaran
     TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWEA) | (1<<TWIE);
 }
 
 int main(void) {
     TWI_init_slave();
     
-    int timer = 0;
-    int8_t svaj = 0; // Används för att simulera att roboten rör sig på linjen
-    int8_t svaj_riktning = 1;
+    // Kopior av datan så vi inte läser dem medan ISR försöker skriva över dem
+    uint8_t fall;
+    int8_t  data_1, data_2, data_3;
 
     while (1) {
-        timer++;
+        if (nytt_paket_mottaget) {
+            
+            // Kolla så det faktiskt är ett giltigt paket med Start- och Stoppbyte
+            if (rx_buffer[0] == 0x05 && rx_buffer[7] == 0xFF) {
+                
+                fall   = rx_buffer[1];
+                data_1 = (int8_t)rx_buffer[2]; 
+                data_2 = (int8_t)rx_buffer[3]; 
+                data_3 = (int8_t)rx_buffer[4]; 
 
-        // --- 1. SIMULERA LINJEFÖLJNING (Kontinuerligt) ---
-        // Får värdet att pendla mellan -3 och +3
-        svaj += svaj_riktning;
-        if (svaj > 3 || svaj < -3) svaj_riktning = -svaj_riktning; 
-        
-        tx_buffer[2] = svaj;       // Avvikelse fram
-        tx_buffer[3] = -svaj;      // Avvikelse bak (skapar en vinkel)
-
-        // Återställ till "normal" körning (2 lampor ser svart, inget hinder)
-        tx_buffer[1] = 0x00; 
-        tx_buffer[6] = 2;    
-
-        // --- 2. SIMULERA KORSNING (Kort puls varje ~5 sek) ---
-        if (timer >= 50 && timer <= 55) {
-            tx_buffer[6] = 7; // 7 lampor ser svart -> Korsning!
+                // --- TOLKA PAKETET ---
+                
+                if (fall == 1) {
+                    // FALL 1: NYTT KOMMANDO (Byte 2 är ett char)
+                    char cmd = (char)data_1;
+                    
+                    if (cmd == 'b') {
+                        // Kalla på funktion: backa_robot();
+                    } else if (cmd == 'v') {
+                        // Kalla på funktion: plocka_vara_med_klo();
+                    } else if (cmd == 'a') {
+                        // Kalla på funktion: slapp_vara();
+                    } else if (cmd == 'r' || cmd == 'l' || cmd == 'h') {
+                        // Kalla på sväng-funktioner
+                    } else if (cmd == 'f') {
+                        // Kalla på funktion: kor_framat();
+                    } else if (cmd == 's') {
+                        // Kalla på funktion: stanna_motorer();
+                    }
+                } 
+                
+                else if (fall == 2) {
+                    // FALL 2: LINJEFÖLJNING
+                    int8_t vinkel_fel = data_1;
+                    int8_t fram_fel   = data_2;
+                    int8_t bak_fel    = data_3;
+                    
+                    // Exempel: 
+                    // pd_reglering(vinkel_fel);
+                } 
+                
+                else if (fall == 3) {
+                    // FALL 3: ROTATION PÅGÅR
+                    int8_t gyro_rotationshastighet = data_1;
+                    
+                    // Används t.ex. för att bromsa motorerna om den snurrar för fort:
+                    // reglera_svang_hastighet(gyro_rotationshastighet);
+                }
+            }
+            
+            // Markera att vi har läst datan
+            nytt_paket_mottaget = 0; 
         }
-        
-        // --- 3. SIMULERA HINDER (Kort puls varje ~10 sek) ---
-        if (timer >= 100 && timer <= 105) {
-            tx_buffer[1] = (1 << 2); // Sätter bit 2 hög -> Hinder!
-        }
-
-        // --- 4. BÖRJA OM ---
-        if (timer > 120) {
-            timer = 0;
-        }
-
-        _delay_ms(100); // AVR väntar 0.1 sekunder, Pi:n läser när den vill
-    } 
+    }
 }
