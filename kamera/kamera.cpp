@@ -1,42 +1,41 @@
-#include <opencv4/opencv2/opencv.hpp>
+#include <opencv2/opencv.hpp>
 #include <iostream>
 
 using namespace cv;
 using namespace std;
 
 int main() {
-    // Öppna kameran med V4L2-backend (Viktigt för RPi)
+    // Öppna kameran med V4L2
     VideoCapture cap(0, CAP_V4L2);
 
     if (!cap.isOpened()) {
-        cerr << "FEL: Kunde inte ansluta till kameran!" << endl;
+        cerr << "FEL: Kunde inte öppna enheten /dev/video0" << endl;
         return -1;
     }
 
-    // Sätt upplösningen lågt för att spara CPU på din Pi 3B+
+    // Tvinga fram MJPG och en standardupplösning
+    cap.set(CAP_PROP_FOURCC, VideoWriter::fourcc('M', 'J', 'P', 'G'));
     cap.set(CAP_PROP_FRAME_WIDTH, 640);
     cap.set(CAP_PROP_FRAME_HEIGHT, 480);
+    cap.set(CAP_PROP_FPS, 30);
 
     Mat frame;
-    namedWindow("Live-feed", WINDOW_AUTOSIZE);
+    namedWindow("Kamera", WINDOW_AUTOSIZE);
 
-    cout << "Kameran körs. Tryck på valfri tangent för att avsluta." << endl;
+    cout << "Försöker hämta bild..." << endl;
 
     while (true) {
-    if (!cap.read(frame)) {
-        cout << "Kunde inte läsa frame från kameran - väntar..." << endl;
-        continue; // Istället för break, försök igen
+        if (!cap.read(frame)) {
+            // Om den misslyckas, vänta lite och försök igen
+            cout << "Väntar på bildruta..." << endl;
+            waitKey(500); 
+            continue;
+        }
+
+        imshow("Kamera", frame);
+
+        if (waitKey(1) == 'q' || waitKey(1) == 27) break;
     }
-
-    if (frame.empty()) {
-        cout << "Tom bildruta!" << endl;
-        break;
-    }
-
-    imshow("Live-feed", frame);
-
-    if (waitKey(30) >= 0) break; // 30ms ger ca 30 FPS
-}
 
     cap.release();
     destroyAllWindows();
