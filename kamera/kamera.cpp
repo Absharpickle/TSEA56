@@ -23,15 +23,20 @@ int main() {
     cout << "Kameran körs. Tryck på valfri tangent för att avsluta." << endl;
 
     while (true) {
-        cap >> frame; // Hämta ny bildruta
-
-        if (frame.empty()) break;
-
-        imshow("Live-feed", frame); // Visa bilden
-
-        // Vänta 1ms på tangenttryck
-        if (waitKey(1) >= 0) break;
+    if (!cap.read(frame)) {
+        cout << "Kunde inte läsa frame från kameran - väntar..." << endl;
+        continue; // Istället för break, försök igen
     }
+
+    if (frame.empty()) {
+        cout << "Tom bildruta!" << endl;
+        break;
+    }
+
+    imshow("Live-feed", frame);
+
+    if (waitKey(30) >= 0) break; // 30ms ger ca 30 FPS
+}
 
     cap.release();
     destroyAllWindows();
