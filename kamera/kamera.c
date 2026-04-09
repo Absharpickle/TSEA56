@@ -1,48 +1,39 @@
-#include <opencv2/highgui/highgui_c.h>
-#include <opencv2/videoio/videoio_c.h>
-#include <stdio.h>
+#include <opencv2/opencv.hpp>
+#include <iostream>
+
+using namespace cv;
+using namespace std;
 
 int main() {
-    // Öppna kameraströmmen (0 = första kameran)
-    // CV_CAP_V4L2 tvingar användning av Video4Linux2 som lirar med libcamera
-    CvCapture* capture = cvCreateCameraCapture(0);
-    
-    if (!capture) {
-        fprintf(stderr, "FEL: Kunde inte hitta kameran!\n");
+    // Öppna kameran med V4L2-backend (Viktigt för RPi)
+    VideoCapture cap(0, CAP_V4L2);
+
+    if (!cap.isOpened()) {
+        cerr << "FEL: Kunde inte ansluta till kameran!" << endl;
         return -1;
     }
 
-    // Sätt upplösningen för bättre prestanda på en RPi 3B+
-    cvSetCaptureProperty(capture, CV_CAP_PROP_FRAME_WIDTH, 640);
-    cvSetCaptureProperty(capture, CV_CAP_PROP_FRAME_HEIGHT, 480);
+    // Sätt upplösningen lågt för att spara CPU på din Pi 3B+
+    cap.set(CAP_PROP_FRAME_WIDTH, 640);
+    cap.set(CAP_PROP_FRAME_HEIGHT, 480);
 
-    // Skapa fönstret
-    cvNamedWindow("Kamera-fönster", CV_WINDOW_AUTOSIZE);
+    Mat frame;
+    namedWindow("Live-feed", WINDOW_AUTOSIZE);
 
-    IplImage* frame;
+    cout << "Kameran körs. Tryck på valfri tangent för att avsluta." << endl;
 
-    printf("Visar kamera. Tryck på ESC för att avsluta.\n");
+    while (true) {
+        cap >> frame; // Hämta ny bildruta
 
-    while (1) {
-        // Hämta en bildruta
-        frame = cvQueryFrame(capture);
-        if (!frame) {
-            break;
-        }
+        if (frame.empty()) break;
 
-        // Visa bildrutan
-        cvShowImage("Kamera-fönster", frame);
+        imshow("Live-feed", frame); // Visa bilden
 
-        // Vänta 10ms, avsluta om användaren trycker på ESC (ASCII 27)
-        char c = cvWaitKey(10);
-        if (c == 27) {
-            break;
-        }
+        // Vänta 1ms på tangenttryck
+        if (waitKey(1) >= 0) break;
     }
 
-    // Städa upp
-    cvReleaseCapture(&capture);
-    cvDestroyWindow("Kamera-fönster");
-
+    cap.release();
+    destroyAllWindows();
     return 0;
 }
