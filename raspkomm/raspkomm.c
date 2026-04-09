@@ -181,7 +181,9 @@ int main() {
     init_karta();
     int aktivvag_u = 12; 
     int aktivvag_v = 13; 
-    char start_riktning = 'n'; 
+    
+    // Ändrad från 'n' till 's' enligt önskemål!
+    char start_riktning = 's'; 
 
     berakna_rutter(aktivvag_u, aktivvag_v, start_riktning);
     beslutsfunktion(malrutt, start_riktning, malbeslut);
@@ -192,10 +194,15 @@ int main() {
         nodriktningsmatris[ingangsnod][den_andra] : nodriktningsmatris[den_andra][ingangsnod];
     beslutsfunktion(slutrutt, riktning_efter_upphamtning, slutbeslut);
 
-    printf("Målrutt (Beslut):  ");
-    for (int i = 0; malbeslut[i] != 'X'; i++) printf("%c ", malbeslut[i]);
-    printf("\nSlutrutt (Beslut): ");
-    for (int i = 0; slutbeslut[i] != 'X'; i++) printf("%c ", slutbeslut[i]);
+    printf("Målrutt Noder:     ");
+    for (int i = 0; malrutt[i] != STOP; i++) printf("%d ", malrutt[i]);
+    printf("\nMålrutt Beslut:    ");
+    for (int i = 0; malbeslut[i] != 'X'; i++) printf("%c  ", malbeslut[i]);
+    
+    printf("\n\nSlutrutt Noder:    ");
+    for (int i = 0; slutrutt[i] != STOP; i++) printf("%d ", slutrutt[i]);
+    printf("\nSlutrutt Beslut:   ");
+    for (int i = 0; slutbeslut[i] != 'X'; i++) printf("%c  ", slutbeslut[i]);
     printf("\n\n");
 
     // --- 3.2 INITIERA I2C ---
@@ -214,7 +221,7 @@ int main() {
     bool var_i_korsning_forra_loopen = false;
     
     bool roterar_just_nu = false;
-    int rotation_timer = 0;    // NY TIMER FÖR BLINDTID
+    int rotation_timer = 0;    
     
     uint8_t aktuellt_fall = 2; // Startar i linjeföljningsläge (Fall 2)
     char skickat_kommando = 'f';
@@ -227,7 +234,6 @@ int main() {
         if (read(file, buffer_in, 8) == 8) {
             
             uint8_t stat  = buffer_in[0];
-            uint8_t dist  = buffer_in[5];
             
             int16_t dev0  = (int16_t)(buffer_in[1] | (buffer_in[2] << 8));
             int16_t dev1  = (int16_t)(buffer_in[3] | (buffer_in[4] << 8));
@@ -236,41 +242,32 @@ int main() {
             int8_t vinkel_fel = (int8_t)(dev0 - dev1); 
 
             // Utvärdera status-bytes
-            bool hinder_detekterat = (stat & (1 << 2)) != 0; 
             bool korsning_detekterad = (stat & (1 << 3)) != 0; 
-            bool linje_fram_hittad = (stat & (1 << 0)) != 0; // Bit 0 är hög när framsensorn ser linjen
+            bool linje_fram_hittad = (stat & (1 << 0)) != 0; 
 
             // --- B: VÄLJ FALL (Prioriteringsordning) ---
             
-            // Prioritet 1: Hinder!
-            if (hinder_detekterat && !roterar_just_nu) {
-                aktuellt_fall = 1;
-                skickat_kommando = 'b';
-                roterar_just_nu = true;
-                rotation_timer = 50; // Ger roboten 2.5 sekunder (50 * 50ms) att vända sig.
-                
-                printf("[HINDER] %d cm kvar! Skickar rotera-bakåt (b)\n", dist);
-                log_robot_status(aktuellt_fall, skickat_kommando, vinkel_fel, "HINDER");
-            } 
-            
-            // Prioritet 2: Ny korsning!
-            else if (korsning_detekterad && !var_i_korsning_forra_loopen && !roterar_just_nu) {
+            // Prioritet 1: Ny korsning! (Hinder borttaget)
+            if (korsning_detekterad && !var_i_korsning_forra_loopen && !roterar_just_nu) {
                 aktuellt_fall = 1;
                 skickat_kommando = aktuell_rutt[beslut_index];
+                
+                // Räkna ut exakt vilken nod vi är på just nu
+                int nuvarande_nod = (aktuell_rutt == malbeslut) ? malrutt[beslut_index] : slutrutt[beslut_index];
                 
                 if (skickat_kommando == 'X') { 
                     if (aktuell_rutt == malbeslut) {
                         skickat_kommando = 'v'; 
-                        printf("\n*** FRAMME! HÄMTAR VARA (v)... ***\n");
+                        printf("\n*** FRAMME VID NOD %d! HÄMTAR VARA (v)... ***\n", nuvarande_nod);
                         aktuell_rutt = slutbeslut;
                         beslut_index = 0;
                     } else {
                         skickat_kommando = 'a'; 
-                        printf("\n*** END NÅDD! LÄMNAR VARA (a)... ***\n");
+                        printf("\n*** END NÅDD (NOD %d)! LÄMNAR VARA (a)... ***\n", nuvarande_nod);
                         uppdrag_klart = true;
                     }
                 } else {
-                    printf("[KORSNING %d] Skickar kommando: '%c'\n", beslut_index, skickat_kommando);
+                    printf("[KORSNING: NOD %d] Skickar kommando: '%c'\n", nuvarande_nod, skickat_kommando);
                     beslut_index++;
                     
                     if (skickat_kommando == 'l' || skickat_kommando == 'r' || skickat_kommando == 'b') {
@@ -281,17 +278,14 @@ int main() {
                 log_robot_status(aktuellt_fall, skickat_kommando, vinkel_fel, "KORSNING");
             }
 
-            // Prioritet 3: Pågående rotation
+            // Prioritet 2: Pågående rotation
             else if (roterar_just_nu) {
                 aktuellt_fall = 3;
                 
-                // Räkna ner blindtiden först
                 if (rotation_timer > 0) {
                     rotation_timer--;
                 } 
                 else {
-                    // Timern har gått ut! Nu lyssnar vi på sensorerna igen.
-                    // Om vi är tillbaka på linjen (och har lämnat den tjocka korsningen) så är vi klara.
                     if (linje_fram_hittad && !korsning_detekterad) {
                         roterar_just_nu = false; 
                         printf("[ROTATION KLAR] Återgår till linjeföljning.\n");
@@ -299,7 +293,7 @@ int main() {
                 }
             }
 
-            // Prioritet 4: Linjeföljning
+            // Prioritet 3: Linjeföljning
             else {
                 aktuellt_fall = 2;
                 skickat_kommando = '-'; 
