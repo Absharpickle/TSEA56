@@ -141,7 +141,7 @@ void beslutsfunktion(int rutt_array[], char start_riktning, char beslut_out[]) {
 }
 
 // =================================================================
-// 2. LOGGFUNKTION FÖR SYSTEMET
+// 2. LOGG- OCH VERIFIKATIONSFUNKTIONER
 // =================================================================
 void log_robot_status(uint8_t fall, char cmd, int8_t vinkel, const char* status) {
     FILE *f = fopen("robot_logg.txt", "a");
@@ -153,6 +153,24 @@ void log_robot_status(uint8_t fall, char cmd, int8_t vinkel, const char* status)
     fclose(f);
 }
 
+void log_verifikation(uint8_t* sent, uint8_t* received) {
+    FILE *f = fopen("verifikation.txt", "a");
+    if (f == NULL) return;
+
+    fprintf(f, "SKICKAT (0x12): ");
+    for(int i = 0; i < 8; i++) fprintf(f, "%02X ", sent[i]);
+    
+    fprintf(f, "\nECHO    (0x12): ");
+    for(int i = 0; i < 8; i++) fprintf(f, "%02X ", received[i]);
+
+    if (memcmp(sent, received, 8) == 0) {
+        fprintf(f, " | MATCH ✔️\n\n");
+    } else {
+        fprintf(f, " | FEL ❌\n\n");
+    }
+    fclose(f);
+}
+
 // =================================================================
 // 3. HUVUDPROGRAM (I2C + AUTONOM LOOP)
 // =================================================================
@@ -161,8 +179,8 @@ int main() {
     
     // --- 3.1 INITIERA RUTTER ---
     init_karta();
-    int aktivvag_u = 12; // Mål-nod 1 (Byt ut till de noder ni tar emot från GUI)
-    int aktivvag_v = 13; // Mål-nod 2
+    int aktivvag_u = 12; // Exempel: Mål-nod 1
+    int aktivvag_v = 13; // Exempel: Mål-nod 2
     char start_riktning = 'n'; 
 
     berakna_rutter(aktivvag_u, aktivvag_v, start_riktning);
@@ -200,23 +218,23 @@ int main() {
     char skickat_kommando = 'f';
     bool uppdrag_klart = false;
 
-    printf("Startar Autonom I2C-loop mot vägpar (%d, %d)...\n", aktivvag_u, aktivvag_v);
+    printf("Startar Autonom I2C-loop...\n");
 
     while (!uppdrag_klart) {
         // --- A: LÄS FRÅN SENSOR (0x11) ---
         ioctl(file, I2C_SLAVE, 0x11);
         if (read(file, buffer_in, 8) == 8) {
             
-            // Plocka ut variabler (JUSTERA BYTE-INDEX HÄR OM DET BEHÖVS)
+            // Plocka ut variabler (JUSTERA INDEX HÄR OM DET BEHÖVS)
             uint8_t status_flags   = buffer_in[1];
             int8_t avvikelse_fram  = (int8_t)buffer_in[2];
             int8_t avvikelse_bak   = (int8_t)buffer_in[3];
-            int8_t rotations_hastighet = (int8_t)buffer_in[4]; // Byte 4 = Gyro?
-            uint8_t antal_aktiva_lampor = buffer_in[6];        // Byte 6 = Antal tända lampor?
+            int8_t rotations_hastighet = (int8_t)buffer_in[4]; 
+            uint8_t antal_aktiva_lampor = buffer_in[6];        
 
             int8_t vinkel_fel = avvikelse_fram - avvikelse_bak;
-            bool hinder_detekterat = (status_flags & (1 << 2)) != 0; // Kollar bit 2
-            bool korsning_detekterad = (antal_aktiva_lampor > 4);    // Antar >4 lampor betyder korsning
+            bool hinder_detekterat = (status_flags & (1 << 2)) != 0; 
+            bool korsning_detekterad = (antal_aktiva_lampor > 4);    
 
             // --- B: UTVÄRDERA TILLSTÅND OCH VÄLJ FALL ---
             
@@ -234,24 +252,21 @@ int main() {
                 aktuellt_fall = 1;
                 skickat_kommando = aktuell_rutt[beslut_index];
                 
-                // Om vi nått 'X' är vi vid målet för rutten
-                if (skickat_kommando == 'X') {
+                if (skickat_kommando == 'X') { // Målet nått!
                     if (aktuell_rutt == malbeslut) {
-                        skickat_kommando = 'v'; // Plocka upp vara
-                        printf("\n*** FRAMME VID VÄGPARET! HÄMTAR VARA (v)... ***\n");
+                        skickat_kommando = 'v'; // Plocka upp
+                        printf("\n*** FRAMME! HÄMTAR VARA (v)... ***\n");
                         aktuell_rutt = slutbeslut;
                         beslut_index = 0;
-                        // OBS: Du kanske vill lägga in en sleep() här eller låsa i ett 
-                        // "plockar_vara"-state tills styrmodulen svarar att klon är klar.
                     } else {
-                        skickat_kommando = 'a'; // Avlämning
-                        printf("\n*** FRAMME VID END! LÄMNAR VARA (a)... ***\n");
+                        skickat_kommando = 'a'; // Lämna
+                        printf("\n*** END NÅDD! LÄMNAR VARA (a)... ***\n");
                         uppdrag_klart = true;
                     }
                 } else {
                     printf("[KORSNING %d] Skickar kommando: '%c'\n", beslut_index, skickat_kommando);
                     beslut_index++;
-                    // Om det är en sväng, gå in i rotations-läge
+                    // Gå in i rotations-läge vid sväng
                     if (skickat_kommando == 'l' || skickat_kommando == 'r' || skickat_kommando == 'b') {
                         roterar_just_nu = true; 
                     }
@@ -259,61 +274,63 @@ int main() {
                 log_robot_status(aktuellt_fall, skickat_kommando, vinkel_fel, "KORSNING");
             }
 
-            // Prioritet 3: Pågående rotation (Fall 3)
+            // Prioritet 3: Pågående rotation
             else if (roterar_just_nu) {
                 aktuellt_fall = 3;
-                
-                // Villkor för att svängen är klar (exempel: 1-3 lampor ser linjen och ej i en bred korsning)
                 if (antal_aktiva_lampor > 0 && antal_aktiva_lampor < 4 && !korsning_detekterad) {
-                    roterar_just_nu = false; // Svängen är färdig, återgå till Fall 2 nästa loop!
+                    roterar_just_nu = false; // Svängen är färdig
                     printf("[ROTATION KLAR] Återgår till linjeföljning.\n");
                 }
             }
 
-            // Prioritet 4: Linjeföljning (Fall 2)
+            // Prioritet 4: Linjeföljning
             else {
                 aktuellt_fall = 2;
-                skickat_kommando = '-'; // Används inte i Fall 2
+                skickat_kommando = '-'; 
             }
 
-            // Spara korsningsstatusen för att bara läsa av *en* gång per korsning
             var_i_korsning_forra_loopen = korsning_detekterad;
 
-
-            // --- C: BYGG I2C-PAKETET ---
-            buffer_out[0] = 0x05;             // Startbyte
-            buffer_out[1] = aktuellt_fall;    // ID (1, 2, 3)
-            
-            // Nollställ för säkerhets skull
+            // --- C: BYGG I2C-PAKETET TILL STYRMODUL ---
+            buffer_out[0] = 0x05;             
+            buffer_out[1] = aktuellt_fall;    
             buffer_out[2] = 0x00; buffer_out[3] = 0x00; buffer_out[4] = 0x00; 
             buffer_out[5] = 0x00; buffer_out[6] = 0x00;
 
             if (aktuellt_fall == 1) {
-                // FALL 1: Nytt kommando
                 buffer_out[2] = (uint8_t)skickat_kommando; 
-            } 
-            else if (aktuellt_fall == 2) {
-                // FALL 2: Linjeföljning
+            } else if (aktuellt_fall == 2) {
                 buffer_out[2] = (uint8_t)vinkel_fel;      
                 buffer_out[3] = (uint8_t)avvikelse_fram;  
                 buffer_out[4] = (uint8_t)avvikelse_bak;   
-            } 
-            else if (aktuellt_fall == 3) {
-                // FALL 3: Rotation
+            } else if (aktuellt_fall == 3) {
                 buffer_out[2] = (uint8_t)rotations_hastighet; 
             }
+            buffer_out[7] = 0xFF; 
 
-            buffer_out[7] = 0xFF; // Stoppbyte
-
-            // --- D: SKICKA TILL STYRMODUL (0x12) ---
+            // --- D: SKICKA TILL STYRMODUL (0x12) OCH LÄS ECHO ---
             ioctl(file, I2C_SLAVE, 0x12);
-            write(file, buffer_out, 8);
+            if (write(file, buffer_out, 8) == 8) {
+                
+                uint8_t buffer_echo[8] = {0};
+                
+                // Låt AVR-chippet kopiera över datan internt till tx_buffer
+                usleep(5000); 
+                
+                if (read(file, buffer_echo, 8) == 8) {
+                    log_verifikation(buffer_out, buffer_echo);
+                } else {
+                    printf("Fel: Kunde inte läsa Echo-verifikation från styrmodulen.\n");
+                }
+            } else {
+                printf("Fel: Kunde inte skriva till styrmodulen.\n");
+            }
             
         } else {
             printf("Fel: Kunde inte läsa från sensormodulen (0x11).\n");
         }
         
-        usleep(50000); // 50ms paus (20 Hz loop)
+        usleep(50000); // 50ms paus (20 Hz)
     }
 
     close(file);
