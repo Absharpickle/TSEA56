@@ -84,22 +84,19 @@ static void log_verification(const uint8_t *sent, const uint8_t *received, ssize
 }
 
 static bool send_command_to_styrkomm(char cmd) {
-    uint8_t buffer[PACKET_SIZE] = {0};
-    buffer[0] = 0x05;             // Paket-ID
-    buffer[1] = 1;                // Fall 1: direktkommando
-    buffer[2] = (uint8_t)cmd;     // Kommando: f/l/r/b
-    buffer[3] = 0x00;
-    buffer[4] = 0x00;
-    buffer[5] = 0x00;
-    buffer[6] = 0x00;
-    buffer[7] = 0xFF;             // Slutbyte
+    uint8_t sent[PACKET_SIZE] = {0};
+    uint8_t echo[PACKET_SIZE] = {0};
+    sent[0] = 0x05;
+    sent[1] = 1;
+    sent[2] = (uint8_t)cmd;
+    sent[7] = 0xFF;
 
     if (ioctl(g_i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
         perror("ioctl(I2C_SLAVE)");
         return false;
     }
 
-    ssize_t written = write(g_i2c_fd, buffer, PACKET_SIZE);
+    ssize_t written = write(g_i2c_fd, sent, PACKET_SIZE);
     if (written != PACKET_SIZE) {
         perror("write");
         return false;
@@ -109,8 +106,7 @@ static bool send_command_to_styrkomm(char cmd) {
     ssize_t r = read(g_i2c_fd, echo, PACKET_SIZE);
     log_verification(sent, echo, r, cmd);
 
-    return true;
-
+    return (r == PACKET_SIZE) && (memcmp(sent, echo, PACKET_SIZE) == 0);
 }
 
 static int read_key(void) {
@@ -139,7 +135,9 @@ int main(void) {
     printf("Piltangent Vänster= vänster ('l')\n");
     printf("Piltangent Höger  = höger ('r')\n");
     printf("Piltangent Ner    = bakåt ('b')\n");
-     printf("Verifikation loggas till: %s\n\n", VERIFY_LOG_FILE);
+    FILE *clr = fopen(VERIFY_LOG_FILE, "w"); // clear old log each run
+    if (clr) fclose(clr);
+    printf("Verifikation loggas till: %s\n\n", VERIFY_LOG_FILE);
     printf("Tryck 'q' för att avsluta.\n\n");
 
     g_i2c_fd = open(I2C_DEVICE, O_RDWR);
