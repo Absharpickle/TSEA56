@@ -11,10 +11,13 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <time.h>
 
 #define I2C_DEVICE "/dev/i2c-1"
 #define STYRKOMM_ADDR 0x12
 #define PACKET_SIZE 8
+#define VERIFY_LOG_FILE "verifikation_keys.txt"
+
 
 static struct termios g_orig_termios;
 static int g_i2c_fd = -1;
@@ -56,6 +59,30 @@ static bool enable_raw_terminal(void) {
     return true;
 }
 
+static void log_verification(const uint8_t *sent, const uint8_t *received, ssize_t received_len, char cmd) {
+    FILE *f = fopen(VERIFY_LOG_FILE, "a");
+    if (f == NULL) return;
+
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+
+    fprintf(f, "[%02d:%02d:%02d] CMD '%c'\n",
+            t->tm_hour, t->tm_min, t->tm_sec, cmd);
+
+    fprintf(f, "SKICKAT (0x12): ");
+    for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", sent[i]);
+
+    fprintf(f, "\nECHO    (0x12): ");
+    if (received_len == PACKET_SIZE) {
+        for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", received[i]);
+        fprintf(f, " | %s\n\n", (memcmp(sent, received, PACKET_SIZE) == 0) ? "MATCH" : "FEL");
+    } else {
+        fprintf(f, "<read_len=%zd> | FEL\n\n", received_len);
+    }
+
+    fclose(f);
+}
+
 static bool send_command_to_styrkomm(char cmd) {
     uint8_t buffer[PACKET_SIZE] = {0};
     buffer[0] = 0x05;             // Paket-ID
@@ -78,7 +105,12 @@ static bool send_command_to_styrkomm(char cmd) {
         return false;
     }
 
+    usleep(5000);
+    ssize_t r = read(g_i2c_fd, echo, PACKET_SIZE);
+    log_verification(sent, echo, r, cmd);
+
     return true;
+
 }
 
 static int read_key(void) {
@@ -107,6 +139,7 @@ int main(void) {
     printf("Piltangent Vänster= vänster ('l')\n");
     printf("Piltangent Höger  = höger ('r')\n");
     printf("Piltangent Ner    = bakåt ('b')\n");
+     printf("Verifikation loggas till: %s\n\n", VERIFY_LOG_FILE);
     printf("Tryck 'q' för att avsluta.\n\n");
 
     g_i2c_fd = open(I2C_DEVICE, O_RDWR);
