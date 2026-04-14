@@ -115,6 +115,10 @@ static int read_key(void) {
     if (n <= 0) return -1;
 
     if (c == 'q' || c == 'Q') return 'q';
+    if (c == 's' || c == 'S') return 's';
+    if (c == 'e' || c == 'E') return 'e';
+    if (c == 'o' || c == 'O') return 'o';
+    if (c == 'v' || c == 'V') return 'v';
 
     if (c == 0x1B) { // ESC-sekvens för piltangenter
         unsigned char seq[2] = {0};
@@ -161,6 +165,7 @@ int main(void) {
     while (true) {
         int key = read_key();
         char cmd = '\0';
+        int state = 1;
 
         switch (key) {
             case 'A': cmd = 'f'; state = 1; break; // Upp
