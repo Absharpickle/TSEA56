@@ -83,7 +83,7 @@ static void log_verification(const uint8_t *sent, const uint8_t *received, ssize
     fclose(f);
 }
 
-static bool send_command_to_styrkomm(char cmd) {
+static bool send_command_to_styrkomm(char cmd, int state) {
     uint8_t sent[PACKET_SIZE] = {0};
     uint8_t echo[PACKET_SIZE] = {0};
     sent[0] = 0x05;
@@ -180,7 +180,7 @@ int main(void) {
         }
 
         if (cmd != '\0') {
-            if (send_command_to_styrkomm(cmd)) {
+            if (send_command_to_styrkomm(cmd, state)) {
                 printf("Skickade kommando: '%c'\n", cmd);
             } else {
                 fprintf(stderr, "Misslyckades skicka kommando '%c' (errno=%d: %s)\n",
