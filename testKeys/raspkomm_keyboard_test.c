@@ -108,6 +108,7 @@ static int read_key(void) {
     if (c == 'e' || c == 'E') return 'e';
     if (c == 'o' || c == 'O') return 'o';
     if (c == 'v' || c == 'V') return 'v';
+    if (c == 'h' || c == 'H') return 'h';
 
     if (c == 0x1B) { // ESC-sekvens för piltangenter
         unsigned char seq[2] = {0};
