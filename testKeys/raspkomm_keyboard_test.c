@@ -162,8 +162,8 @@ int main(void) {
             case 'C': cmd = 'r'; state = 1; break; // Höger
             case 'D': cmd = 'l'; state = 1; break; // Vänster
             case 's': cmd = 's'; state = 1; break; // Stopp
-            case 'e': cmd = 'e'; state = 4; break; // Medsols
-            case 'o': cmd = 'o'; state = 4; break; // Motsols
+            case 'e': cmd = 'e'; state = 1; break; // Medsols
+            case 'o': cmd = 'o'; state = 1; break; // Motsols
             case 'v': cmd = 'v'; state = 4; break; // Plocka
             case 'q':
                 printf("\nAvslutar...\n");
