@@ -131,7 +131,8 @@ int main(void) {
     printf("Stopp ('s')\n");
     printf("Medsols ('e')\n");
     printf("Motsols ('o')\n");
-    printf("Plocka ('v')\n");
+    printf("Plocka vänster ('v')\n");
+    printf("Plocka höger ('h')\n");
     FILE *clr = fopen(VERIFY_LOG_FILE, "w"); // clear old log each run
     if (clr) fclose(clr);
     printf("Verifikation loggas till: %s\n\n", VERIFY_LOG_FILE);
@@ -164,7 +165,8 @@ int main(void) {
             case 's': cmd = 's'; state = 1; break; // Stopp
             case 'e': cmd = 'e'; state = 1; break; // Medsols
             case 'o': cmd = 'o'; state = 1; break; // Motsols
-            case 'v': cmd = 'v'; state = 4; break; // Plocka
+            case 'h': cmd = 'h'; state = 4; break; // Plocka höger
+            case 'v': cmd = 'v'; state = 4; break; // Plocka vänster
             case 'q':
                 printf("\nAvslutar...\n");
                 cleanup_and_exit(0);
