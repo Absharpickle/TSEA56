@@ -87,7 +87,7 @@ static bool send_command_to_styrkomm(char cmd) {
     uint8_t sent[PACKET_SIZE] = {0};
     uint8_t echo[PACKET_SIZE] = {0};
     sent[0] = 0x05;
-    sent[1] = (unint8_t)state;
+    sent[1] = (uint8_t)state;
     sent[2] = (uint8_t)cmd;
     sent[7] = 0xFF;
 
