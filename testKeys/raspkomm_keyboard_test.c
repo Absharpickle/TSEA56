@@ -163,14 +163,14 @@ int main(void) {
         char cmd = '\0';
 
         switch (key) {
-            case 'A': cmd = 'f', state = 1; break; // Upp
-            case 'B': cmd = 'b', state = 1; break; // Ner
-            case 'C': cmd = 'r', state = 1; break; // Höger
-            case 'D': cmd = 'l', state = 1; break; // Vänster
-            case 's': cmd = 's', state = 1; break; // Stopp
-            case 'e': cmd = 'e', state = 4; break; // Medsols
-            case 'o': cmd = 'o', state = 4; break; // Motsols
-            case 'v': cmd = 'v', state = 4; break; // Plocka
+            case 'A': cmd = 'f'; state = 1; break; // Upp
+            case 'B': cmd = 'b'; state = 1; break; // Ner
+            case 'C': cmd = 'r'; state = 1; break; // Höger
+            case 'D': cmd = 'l'; state = 1; break; // Vänster
+            case 's': cmd = 's'; state = 1; break; // Stopp
+            case 'e': cmd = 'e'; state = 4; break; // Medsols
+            case 'o': cmd = 'o'; state = 4; break; // Motsols
+            case 'v': cmd = 'v'; state = 4; break; // Plocka
             case 'q':
                 printf("\nAvslutar...\n");
                 cleanup_and_exit(0);
