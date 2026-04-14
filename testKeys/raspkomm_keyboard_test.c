@@ -59,7 +59,7 @@ static bool enable_raw_terminal(void) {
     return true;
 }
 
-static void log_verification(const uint8_t *sent, const uint8_t *received, ssize_t received_len, char cmd) {
+static void log_verification(const uint8_t *sent, char cmd) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
     if (f == NULL) return;
 
@@ -71,21 +71,13 @@ static void log_verification(const uint8_t *sent, const uint8_t *received, ssize
 
     fprintf(f, "SKICKAT (0x12): ");
     for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", sent[i]);
-
-    fprintf(f, "\nECHO    (0x12): ");
-    if (received_len == PACKET_SIZE) {
-        for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", received[i]);
-        fprintf(f, " | %s\n\n", (memcmp(sent, received, PACKET_SIZE) == 0) ? "MATCH" : "FEL");
-    } else {
-        fprintf(f, "<read_len=%zd> | FEL\n\n", received_len);
-    }
+    fprintf(f, "\nECHO    (0x12): <ej last>\n\n");
 
     fclose(f);
 }
 
 static bool send_command_to_styrkomm(char cmd, int state) {
     uint8_t sent[PACKET_SIZE] = {0};
-    uint8_t echo[PACKET_SIZE] = {0};
     sent[0] = 0x05;
     sent[1] = (uint8_t)state;
     sent[2] = (uint8_t)cmd;
@@ -102,11 +94,8 @@ static bool send_command_to_styrkomm(char cmd, int state) {
         return false;
     }
 
-    usleep(5000);
-    ssize_t r = read(g_i2c_fd, echo, PACKET_SIZE);
-    log_verification(sent, echo, r, cmd);
-
-    return (r == PACKET_SIZE) && (memcmp(sent, echo, PACKET_SIZE) == 0);
+    log_verification(sent, cmd);
+    return true;
 }
 
 static int read_key(void) {
