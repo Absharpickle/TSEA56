@@ -115,6 +115,7 @@ static int read_key(void) {
     if (n <= 0) return -1;
 
     if (c == 'q' || c == 'Q') return 'q';
+    if (c == 's' || c == 'S') return 's';
 
     if (c == 0x1B) { // ESC-sekvens för piltangenter
         unsigned char seq[2] = {0};
@@ -135,6 +136,7 @@ int main(void) {
     printf("Piltangent Vänster= vänster ('l')\n");
     printf("Piltangent Höger  = höger ('r')\n");
     printf("Piltangent Ner    = bakåt ('b')\n");
+    printf("Stopp ('s' eller 'S')\n");
     FILE *clr = fopen(VERIFY_LOG_FILE, "w"); // clear old log each run
     if (clr) fclose(clr);
     printf("Verifikation loggas till: %s\n\n", VERIFY_LOG_FILE);
@@ -163,6 +165,7 @@ int main(void) {
             case 'B': cmd = 'b'; break; // Ner
             case 'C': cmd = 'r'; break; // Höger
             case 'D': cmd = 'l'; break; // Vänster
+            case 's': cmd = 's'; break; // Stopp
             case 'q':
                 printf("\nAvslutar...\n");
                 cleanup_and_exit(0);
