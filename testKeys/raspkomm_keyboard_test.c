@@ -87,7 +87,7 @@ static bool send_command_to_styrkomm(char cmd) {
     uint8_t sent[PACKET_SIZE] = {0};
     uint8_t echo[PACKET_SIZE] = {0};
     sent[0] = 0x05;
-    sent[1] = 1;
+    sent[1] = (unint8_t)state;
     sent[2] = (uint8_t)cmd;
     sent[7] = 0xFF;
 
@@ -115,7 +115,6 @@ static int read_key(void) {
     if (n <= 0) return -1;
 
     if (c == 'q' || c == 'Q') return 'q';
-    if (c == 's' || c == 'S') return 's';
 
     if (c == 0x1B) { // ESC-sekvens för piltangenter
         unsigned char seq[2] = {0};
@@ -136,7 +135,10 @@ int main(void) {
     printf("Piltangent Vänster= vänster ('l')\n");
     printf("Piltangent Höger  = höger ('r')\n");
     printf("Piltangent Ner    = bakåt ('b')\n");
-    printf("Stopp ('s' eller 'S')\n");
+    printf("Stopp ('s')\n");
+    printf("Medsols ('e')\n");
+    printf("Motsols ('o')\n");
+    printf("Plocka ('v')\n");
     FILE *clr = fopen(VERIFY_LOG_FILE, "w"); // clear old log each run
     if (clr) fclose(clr);
     printf("Verifikation loggas till: %s\n\n", VERIFY_LOG_FILE);
@@ -161,11 +163,14 @@ int main(void) {
         char cmd = '\0';
 
         switch (key) {
-            case 'A': cmd = 'f'; break; // Upp
-            case 'B': cmd = 'b'; break; // Ner
-            case 'C': cmd = 'r'; break; // Höger
-            case 'D': cmd = 'l'; break; // Vänster
-            case 's': cmd = 's'; break; // Stopp
+            case 'A': cmd = 'f', state = 1; break; // Upp
+            case 'B': cmd = 'b', state = 1; break; // Ner
+            case 'C': cmd = 'r', state = 1; break; // Höger
+            case 'D': cmd = 'l', state = 1; break; // Vänster
+            case 's': cmd = 's', state = 1; break; // Stopp
+            case 'e': cmd = 'e', state = 4; break; // Medsols
+            case 'o': cmd = 'o', state = 4; break; // Motsols
+            case 'v': cmd = 'v', state = 4; break; // Plocka
             case 'q':
                 printf("\nAvslutar...\n");
                 cleanup_and_exit(0);
