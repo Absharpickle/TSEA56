@@ -9,10 +9,9 @@
 #include <string.h>
 #include <time.h>
 #include <termios.h>
-#include <sys/select.h>
 
 // =================================================================
-// 1. TERMINAL-HANTERING (Bulletproof kbhit)
+// 1. TERMINAL-HANTERING
 // =================================================================
 struct termios orig_termios;
 
@@ -22,23 +21,16 @@ void disable_raw_mode() {
 
 void enable_raw_mode() {
     tcgetattr(STDIN_FILENO, &orig_termios);
-    atexit(disable_raw_mode); // Återställ alltid terminalen vid krasch/exit
+    atexit(disable_raw_mode); 
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON); // Stäng av eko och Enter-krav
+    raw.c_lflag &= ~(ECHO | ICANON); 
+    raw.c_cc[VMIN] = 0;  // Gör inläsningen non-blocking
+    raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 }
 
-// Robust funktion för att kolla om en tangent är tryckt (utan att hänga systemet)
-int kbhit() {
-    struct timeval tv = { 0L, 0L };
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(STDIN_FILENO, &fds);
-    return select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0;
-}
-
 // =================================================================
-// 2. DIJKSTRA & RUTTPLANERING (Samma som innan)
+// 2. DIJKSTRA & RUTTPLANERING
 // =================================================================
 #define NODES 27
 #define START 25
@@ -167,15 +159,9 @@ void log_verifikation(uint8_t* sent, uint8_t* received) {
 int main() {
     enable_raw_mode(); 
     
-    // 1. Skriv ut DIREKT så vi vet att programmet lever
     printf("--- SYSTEMSTART RASPBERRY PI ---\n\r");
-    printf("TANGENTBORDSKONTROLLER:\n\r");
-    printf(" [A] = Auto Läge (Dijkstra)\n\r");
-    printf(" [M] = Manuell Läge\n\r");
-    printf("     -> [H] Styr Hjul (Pilar)\n\r");
-    printf("     -> [K] Styr Klo  (Pilar Upp/Ner)\n\r");
-    printf("     -> [S] Stoppa rörelse\n\r");
-    printf(" [Q] = Avsluta programmet\n\n\r");
+    printf(" [A] = Auto (Dijkstra) | [M] = Manuell | [Q] = Avsluta\n\r");
+    printf(" I Manuell: [H] = Styr Hjul | [K] = Styr Klo | [S] = Stopp\n\n\r");
     
     init_karta();
     int aktivvag_u = 12; 
@@ -184,31 +170,39 @@ int main() {
 
     berakna_rutter(aktivvag_u, aktivvag_v, start_riktning);
     
-    // Tydlig I2C-felhantering
+    int ingangs_nod_id = malrutt[rakna_langd(malrutt) - 1]; 
+    int utgangs_nod_id = (ingangs_nod_id == aktivvag_u) ? aktivvag_v : aktivvag_u;
+    
+    char riktning_efter_upphamtning = nodriktningsmatris[ingangs_nod_id][utgangs_nod_id];
+    beslutsfunktion(slutrutt, riktning_efter_upphamtning, slutbeslut);
+
     int file = open("/dev/i2c-1", O_RDWR);
     if (file < 0) {
         printf("\n\r[FEL] Kunde inte öppna /dev/i2c-1! Har du kört med 'sudo'?\n\r");
         return 1; 
     }
 
-    uint8_t buffer_in[8];
-    uint8_t buffer_out[8];
+    uint8_t buffer_in[8], buffer_out[8];
 
-    // --- Tillståndsvariabler ---
-    int beslut_index = 0;
+    // --- TILLSTÅNDSVARIABLER (AUTO) ---
+    char* aktuell_rutt = malbeslut; 
+    int* aktuella_noder = malrutt; 
+    int  beslut_index = 0;
+    
     bool var_i_korsning_forra_loopen = false;
     bool roterar_just_nu = false;
     int rotation_timer = 0;    
     bool uppdrag_klart = false;
 
+    char nuvarande_riktning = start_riktning; 
     bool is_heading_to_mid_pickup = false;
-    int ingangs_nod_id = malrutt[rakna_langd(malrutt) - 1];
-    int utgangs_nod_id = (ingangs_nod_id == aktivvag_u) ? aktivvag_v : aktivvag_u;
 
+    // --- TILLSTÅNDSVARIABLER (MANUELL) ---
     bool is_manual_mode = false;
     char manual_target = 'h'; 
     char manual_action = 's'; 
 
+    // Protokoll-variablerna
     uint8_t out_state = 1; 
     char out_cmd = 'h';    
     char out_action = 's'; 
@@ -219,44 +213,43 @@ int main() {
 
     while (!uppdrag_klart) {
         
-        // =================================================================
-        // A. LÄS TANGENTBORDET (Robust)
-        // =================================================================
-        while (kbhit()) {
-            char c = getchar(); // Läs tryckt knapp
+        // --- A. LÄS TANGENTBORDET (Robust ANSI Escape Sequence-hantering) ---
+        char c;
+        while (read(STDIN_FILENO, &c, 1) == 1) {
             
-            if (c == 'q' || c == 'Q') { uppdrag_klart = true; break; }
-            if (c == 'a' || c == 'A') { is_manual_mode = false; printf("\n\r>>> LÄGE: AUTO <<<\n\r"); }
-            if (c == 'm' || c == 'M') { is_manual_mode = true;  printf("\n\r>>> LÄGE: MANUELL <<<\n\r"); manual_action = 's'; }
-            if (c == 'h' || c == 'H') { manual_target = 'h'; printf("\r[Manuell] Mål satt till: HJUL\n\r"); }
-            if (c == 'k' || c == 'K') { manual_target = 'a'; printf("\r[Manuell] Mål satt till: KLO\n\r"); }
-            if (c == 's' || c == 'S') { manual_action = 's'; printf("\r[Manuell] STOPP\n\r");}
-
-            // Fånga piltangenter (Esc -> [ -> A/B/C/D)
+            // Om vi får ett Escape-tecken, döljer sig förmodligen en pil här
             if (c == '\x1b') { 
-                usleep(5000); // Ge tangentbordet 5ms att skicka resten av piltangenten
-                if (kbhit()) {
-                    char seq1 = getchar();
-                    if (seq1 == '[' && kbhit()) {
-                        char arrow = getchar();
-                        
+                char seq[2];
+                usleep(20000); // Ge tangentbordet 20ms att skicka [ och A
+                
+                // Läs de två sista tecknen i sekvensen
+                if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
+                    if (read(STDIN_FILENO, &seq[1], 1) == 1) {
+                        char arrow = seq[1];
                         if (manual_target == 'h') {
                             if (arrow == 'A') { manual_action = 'f'; printf("\r[Manuell] Kör Framåt\n\r"); }
-                            if (arrow == 'B') { manual_action = 'b'; printf("\r[Manuell] Backar\n\r"); }
-                            if (arrow == 'C') { manual_action = 'r'; printf("\r[Manuell] Svänger Höger\n\r"); }
-                            if (arrow == 'D') { manual_action = 'l'; printf("\r[Manuell] Svänger Vänster\n\r"); }
+                            else if (arrow == 'B') { manual_action = 'b'; printf("\r[Manuell] Backar\n\r"); }
+                            else if (arrow == 'C') { manual_action = 'r'; printf("\r[Manuell] Svänger Höger\n\r"); }
+                            else if (arrow == 'D') { manual_action = 'l'; printf("\r[Manuell] Svänger Vänster\n\r"); }
                         } else if (manual_target == 'a') {
                             if (arrow == 'A') { manual_action = 'p'; printf("\r[Manuell] Klo Plockar\n\r"); }
-                            if (arrow == 'B') { manual_action = 'd'; printf("\r[Manuell] Klo Lämnar\n\r"); }
+                            else if (arrow == 'B') { manual_action = 'd'; printf("\r[Manuell] Klo Lämnar\n\r"); }
                         }
                     }
                 }
+            } 
+            else {
+                // Vanliga bokstäver (A, M, S, osv.)
+                if (c == 'q' || c == 'Q') { uppdrag_klart = true; break; }
+                else if (c == 'a' || c == 'A') { is_manual_mode = false; printf("\n\r>>> LÄGE: AUTO <<<\n\r"); }
+                else if (c == 'm' || c == 'M') { is_manual_mode = true;  printf("\n\r>>> LÄGE: MANUELL <<<\n\r"); manual_action = 's'; }
+                else if (c == 'h' || c == 'H') { manual_target = 'h'; printf("\r[Manuell] Mål: HJUL\n\r"); }
+                else if (c == 'k' || c == 'K') { manual_target = 'a'; printf("\r[Manuell] Mål: KLO\n\r"); }
+                else if (c == 's' || c == 'S') { manual_action = 's'; printf("\r[Manuell] STOPP\n\r");}
             }
         }
 
-        // =================================================================
-        // B. LÄS SENSOR (0x11)
-        // =================================================================
+        // --- B. LÄS SENSOR ---
         if (ioctl(file, I2C_SLAVE, 0x11) >= 0) {
             if (read(file, buffer_in, 8) == 8) {
                 
@@ -275,40 +268,51 @@ int main() {
                 bool korsning_detekterad = (stat & (1 << 3)) != 0; 
                 bool linje_fram_hittad = (stat & (1 << 0)) != 0; 
 
-                // =================================================================
-                // C. BESLUTSLOGIK
-                // =================================================================
+                // --- C. BESLUTSLOGIK ---
                 if (is_manual_mode) {
-                    out_state = 2; // Manuell
+                    out_state = 2; 
                     out_cmd = manual_target;
                     out_action = manual_action;
                     var_i_korsning_forra_loopen = korsning_detekterad; 
                 } 
                 else {
-                    out_state = 1; // Auto
+                    out_state = 1; 
                     
                     if (korsning_detekterad && !var_i_korsning_forra_loopen && !roterar_just_nu) {
                         
+                        int nuvarande_nod = aktuella_noder[beslut_index];
+
                         if (is_heading_to_mid_pickup) {
                             out_cmd = 'a'; out_action = 'p';
-                            printf("\r*** MITTEN-KORSNING UPPTÄCKT: PLOCKAR VARA (p) ***\n\r");
+                            printf("\r*** MITTEN-KORSNING NÅDD: PLOCKAR VARA (p) ***\n\r");
+                            
+                            aktuell_rutt = slutbeslut;
+                            aktuella_noder = slutrutt;
                             beslut_index = 0;
                             is_heading_to_mid_pickup = false;
                         } 
                         else {
-                            char beslut = malbeslut[beslut_index]; 
+                            char beslut = aktuell_rutt[beslut_index]; 
                             
                             if (beslut == 'X') {
-                                char dir_to_exit = nodriktningsmatris[ingangs_nod_id][utgangs_nod_id];
-                                char cur_dir = 'n'; // Anpassa dynamiskt om möjligt
-                                
-                                out_cmd = 'h';
-                                out_action = get_turn_command(cur_dir, dir_to_exit);
-                                is_heading_to_mid_pickup = true;
-                                printf("\r*** INGÅNGSNOD NÅDD. KÖR MOT MITTEN... ***\n\r");
+                                if (aktuell_rutt == malbeslut) {
+                                    char dir_to_exit = nodriktningsmatris[ingangs_nod_id][utgangs_nod_id];
+                                    out_cmd = 'h';
+                                    out_action = get_turn_command(nuvarande_riktning, dir_to_exit);
+                                    
+                                    printf("\r*** INGÅNGSNOD %d NÅDD. SVÄNGER ('%c') MOT MITTEN... ***\n\r", ingangs_nod_id, out_action);
+                                    
+                                    nuvarande_riktning = dir_to_exit; 
+                                    is_heading_to_mid_pickup = true;
+                                } else {
+                                    out_cmd = 'a'; out_action = 'd';
+                                    printf("\r*** END NÅDD (NOD %d)! LÄMNAR VARA (d)... ***\n\r", END);
+                                    uppdrag_klart = true;
+                                }
                             } else {
                                 out_cmd = 'h'; out_action = beslut;
-                                printf("\r[KORSNING] Auto skickar: '%c'\n\r", beslut);
+                                printf("\r[KORSNING: NOD %d] Auto skickar: '%c'\n\r", nuvarande_nod, beslut);
+                                nuvarande_riktning = nodriktningsmatris[ aktuella_noder[beslut_index] ][ aktuella_noder[beslut_index+1] ];
                                 beslut_index++;
                             }
                         }
@@ -330,9 +334,7 @@ int main() {
                     var_i_korsning_forra_loopen = korsning_detekterad;
                 }
 
-                // =================================================================
-                // D. BYGG OCH SKICKA I2C-PAKET
-                // =================================================================
+                // --- D. BYGG OCH SKICKA I2C-PAKET ---
                 buffer_out[0] = 0x05;                 
                 buffer_out[1] = out_state;            
                 buffer_out[2] = (uint8_t)out_cmd;     
@@ -353,7 +355,7 @@ int main() {
                 }
             }
         }
-        usleep(50000); // 50ms vila
+        usleep(50000); 
     }
 
     close(file);
