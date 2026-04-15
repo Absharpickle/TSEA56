@@ -7,49 +7,73 @@
 #include <errno.h>
 #include <string.h>
 
+/*
+ * Förväntat paketformat från Sensormodulen (8 bytes):
+ * [0]: status (bitmask)
+ * [1-2]: dev0 (int16_t) - Linjeavvikelse sensorrad 0
+ * [3-4]: dev1 (int16_t) - Linjeavvikelse sensorrad 1
+ * [5]: dist (uint8_t)   - IR-avstånd
+ * [6-7]: omega (int16_t)- Gyrovärde
+ */
+
 int main() {
     int file;
     const char *device = "/dev/i2c-1";
     int addr = 0x11;
     uint8_t buffer[8];
 
-    printf("Öppnar I2C-enhet...\n");
+    // 1. Öppna bussen
     if ((file = open(device, O_RDWR)) < 0) {
-        perror("FEL: Kunde inte öppna bussen");
+        fprintf(stderr, "FEL: Kunde inte öppna %s. %s\n", device, strerror(errno));
         return 1;
     }
 
-    printf("Ansluter till slav 0x%02X...\n", addr);
+    // 2. Sätt slav-adress
     if (ioctl(file, I2C_SLAVE, addr) < 0) {
-        perror("FEL: Kunde inte sätta adress");
+        fprintf(stderr, "FEL: Kunde inte ansluta till slav 0x%02X. %s\n", addr, strerror(errno));
         close(file);
         return 1;
     }
 
-    printf("Loggning startad. Väntar på data (Tryck Ctrl+C för att avbryta)...\n");
+    printf("--- I2C MONITOR STARTAD (Slav 0x%02X) ---\n", addr);
+    printf("Status |  Dev0 |  Dev1 | Dist |  Gyro | Rådata (HEX)\n");
+    printf("----------------------------------------------------\n");
 
     while (1) {
-        // Vi skriver ut detta för att se om loopen snurrar
-        printf("Försöker läsa... ");
-        fflush(stdout); 
-
+        // 3. Läs data
         int bytes_read = read(file, buffer, 8);
         
         if (bytes_read == 8) {
-            printf("Lyckades! Sparar till fil.\n");
+            // Tolka Little Endian (samma som i din AVR-kod)
+            uint8_t stat  = buffer[0];
+            int16_t dev0  = (int16_t)(buffer[1] | (buffer[2] << 8));
+            int16_t dev1  = (int16_t)(buffer[3] | (buffer[4] << 8));
+            uint8_t dist  = buffer[5];
+            int16_t omega = (int16_t)(buffer[6] | (buffer[7] << 8));
+
+            // Printa formaterat i terminalen
+            printf(" 0x%02X  | %5d | %5d | %4u | %5d | ", 
+                   stat, dev0, dev1, dist, omega);
             
-            FILE *f = fopen("sensor_log.txt", "a");
-            if (f) {
-                fprintf(f, "Data: ");
-                for(int i=0; i<8; i++) fprintf(f, "%02X ", buffer[i]);
-                fprintf(f, "\n");
-                fclose(f);
+            // Printa även rådata i HEX för felsökning
+            for(int i=0; i<8; i++) {
+                printf("%02X ", buffer[i]);
             }
+            printf("\n");
+
+        } else if (bytes_read < 0) {
+            fprintf(stderr, "\nLäsfel: %s\n", strerror(errno));
+            // Om bussen hänger sig kan man behöva vänta lite innan nytt försök
+            sleep(1);
         } else {
-            printf("Misslyckades. Läste %d bytes. Error: %s\n", bytes_read, strerror(errno));
+            printf("\nVarning: Läste bara %d bytes.\n", bytes_read);
         }
 
-        usleep(500000); // Öka till 500ms för att inte spamma terminalen vid fel
+        // Tvinga terminalen att skriva ut direkt
+        fflush(stdout);
+
+        // 100ms paus
+        usleep(100000);
     }
 
     close(file);
