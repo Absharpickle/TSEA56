@@ -4,54 +4,54 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
+#include <errno.h>
 #include <string.h>
 
-void log_comparison(uint8_t* sent, uint8_t* received) {
-    FILE *f = fopen("validering.txt", "a");
-    if (f == NULL) return;
+int main() {
+    int file;
+    const char *device = "/dev/i2c-1";
+    int addr = 0x11;
+    uint8_t buffer[8];
 
-    fprintf(f, "SKICKAT:  ");
-    for(int i=0; i<8; i++) fprintf(f, "%02X ", sent[i]);
-
-    fprintf(f, "\nMOTTAGET: ");
-    for(int i=0; i<8; i++) fprintf(f, "%02X ", received[i]);
-
-    if (memcmp(sent, received, 8) == 0) {
-        fprintf(f, " | STATUS: MATCH ✔️\n\n");
-    } else {
-        fprintf(f, " | STATUS: FEL ❌\n\n");
+    printf("Öppnar I2C-enhet...\n");
+    if ((file = open(device, O_RDWR)) < 0) {
+        perror("FEL: Kunde inte öppna bussen");
+        return 1;
     }
-    fclose(f);
-}
 
-    int main() {
-        int file;
-        uint8_t buffer_from_sensor[8];
-        uint8_t buffer_back_from_mottagare[8];
+    printf("Ansluter till slav 0x%02X...\n", addr);
+    if (ioctl(file, I2C_SLAVE, addr) < 0) {
+        perror("FEL: Kunde inte sätta adress");
+        close(file);
+        return 1;
+    }
 
-        if ((file = open("/dev/i2c-1", O_RDWR)) < 0) return 1;
+    printf("Loggning startad. Väntar på data (Tryck Ctrl+C för att avbryta)...\n");
 
     while (1) {
-        // 1. LÄS FRÅN SENSOR (0x11)
-        ioctl(file, I2C_SLAVE, 0x11);
-        if (read(file, buffer_from_sensor, 8) == 8) {
+        // Vi skriver ut detta för att se om loopen snurrar
+        printf("Försöker läsa... ");
+        fflush(stdout); 
 
-            // 2. SKRIV TILL MOTTAGARE (0x12)
-            ioctl(file, I2C_SLAVE, 0x12);
-            
-            if (write(file, buffer_from_sensor, 8) == 8) {
-                
-                // 3. LÄS TILLBAKA FRÅN MOTTAGARE (0x12)
-                usleep(5000); // Liten paus så AVR hinner förbereda ISR
-                if (read(file, buffer_back_from_mottagare, 8) == 8) {
-                    printf("Verifikation klar. Kolla validering.txt\n");
-                    log_comparison(buffer_from_sensor, buffer_back_from_mottagare);
-                }
-            }
-        }
+        int bytes_read = read(file, buffer, 8);
         
-        usleep(100000); // 100ms paus
-        usleep(100000); 
+        if (bytes_read == 8) {
+            printf("Lyckades! Sparar till fil.\n");
+            
+            FILE *f = fopen("sensor_log.txt", "a");
+            if (f) {
+                fprintf(f, "Data: ");
+                for(int i=0; i<8; i++) fprintf(f, "%02X ", buffer[i]);
+                fprintf(f, "\n");
+                fclose(f);
+            }
+        } else {
+            printf("Misslyckades. Läste %d bytes. Error: %s\n", bytes_read, strerror(errno));
+        }
+
+        usleep(500000); // Öka till 500ms för att inte spamma terminalen vid fel
     }
+
+    close(file);
     return 0;
 }
