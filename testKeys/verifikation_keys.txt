@@ -1,0 +1,8 @@
+[17:30:46] CMD 'h'
+SKICKAT (0x12): 05 04 68 00 00 00 00 FF 
+ECHO    (0x12): <ej last>
+
+[17:31:07] CMD 'v'
+SKICKAT (0x12): 05 04 76 00 00 00 00 FF 
+ECHO    (0x12): <ej last>
+
