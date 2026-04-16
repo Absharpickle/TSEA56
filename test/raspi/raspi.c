@@ -19,7 +19,7 @@
 int main() {
     int file;
     const char *device = "/dev/i2c-1";
-    int addr = 0x11;
+    int addr = 0x10;
     uint8_t buffer[8];
 
     // 1. Öppna bussen
