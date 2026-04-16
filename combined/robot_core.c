@@ -235,12 +235,26 @@ int main() {
     if (clr) fclose(clr);
     printf("--- PI CORE: CONTINUOUS I2C + NON-BLOCKING UDP ---\n");
 
+    // SETUP I2C
     i2c_fd = open(I2C_DEVICE, O_RDWR);
-    if (i2c_fd < 0 || ioctl(i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
-        perror("Failed to connect to I2C");
-        exit(EXIT_FAILURE);
+    if (i2c_fd < 0) {
+        printf("[WARNING] Failed to open I2C bus (/dev/i2c-1).\n");
+        printf("          -> Running in Network-Only (Simulation) mode.\n");
+    } else {
+        if (ioctl(i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
+            printf("[WARNING] Failed to configure I2C address 0x12.\n");
+            printf("          -> Running in Network-Only (Simulation) mode.\n");
+        } else {
+            // THE PHYSICAL PROBE: Try to write 0 bytes
+            if (write(i2c_fd, NULL, 0) < 0) {
+                printf("[WARNING] Microcontroller not found at 0x12!\n");
+                printf("          Check your physical SDA, SCL, and GND connections.\n");
+                printf("          -> Running in Network-Only (Simulation) mode.\n");
+            } else {
+                printf("Successfully connected AND verified physical I2C address 0x12\n");
+            }
+        }
     }
-    printf("I2C Connected (0x12)\n");
 
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Socket creation failed");
