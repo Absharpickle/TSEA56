@@ -347,13 +347,6 @@ int main() {
 
                 // Blast it down the wire!
                 write(i2c_fd, auto_packet, PACKET_SIZE);
-
-                // 3. Only write to the verifikation.txt file ONCE per change
-                if (log_next_action) {
-                    log_verification(auto_packet, auto_packet[3]);
-                    printf("Action updated to: '%c'\n", auto_packet[3]);
-                    log_next_action = false;
-                }
             }
         }
     }
