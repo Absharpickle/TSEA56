@@ -45,12 +45,15 @@ typedef enum {
 
 AutoPhase current_phase = PHASE_IDLE;
 int current_action_index = 0;
-time_t last_action_time = 0;
 unsigned char current_auto_state = 1;
 bool log_next_action = false;
 
+// --- LOOP TIMING GLOBALS ---
+char aktivt_beslut = 's'; // Default to stop
+int  loop_counter = 0;
+
 // =================================================================
-// 1. KARTA OCH HJÄLPFUNKTIONER 
+// 1. KARTA, HJÄLPFUNKTIONER & RUTTPLANERING
 // =================================================================
 void init_karta() {
     memset(vag, 0, sizeof(vag));
@@ -200,6 +203,16 @@ void log_verification(const unsigned char *sent, char action) {
     fclose(f);
 }
 
+void aktivt_beslut_fn(int index) {
+    if (current_phase == PHASE_TO_ITEM) {
+        aktivt_beslut = beslut_till_vara[index];
+    } else if (current_phase == PHASE_PICKUP) {
+        aktivt_beslut = 'v'; // Arm pickup action
+    } else if (current_phase == PHASE_TO_HOME) {
+        aktivt_beslut = beslut_hem[index];
+    }
+}
+
 void start_autonomous_sequence(unsigned char state) {
     vara_u = 6; 
     vara_v = 7; 
@@ -211,8 +224,11 @@ void start_autonomous_sequence(unsigned char state) {
     current_auto_state = state;
     current_phase = PHASE_TO_ITEM;
     current_action_index = 0;
-    last_action_time = time(NULL);
-    log_next_action = true; // Force the very first action to log
+    
+    // Reset counter and fetch the very first instruction
+    loop_counter = 0;
+    aktivt_beslut_fn(current_action_index); 
+    log_next_action = true; 
     
     printf("-> Route Calculated. Driving to item...\n");
 }
@@ -289,7 +305,7 @@ int main() {
                     current_phase = PHASE_IDLE;
                 }
                 
-                // Blast the manual command to I2C and log it
+                // Blast the manual command to I2C and log it continuously
                 write(i2c_fd, buffer, PACKET_SIZE);
                 log_verification(buffer, action);
                 printf("-> Manual Command Forwarded: '%c'\n", action);
@@ -298,54 +314,62 @@ int main() {
 
         // 2. AUTONOMOUS STATE MACHINE (RUNS CONTINUOUSLY)
         if (current_phase != PHASE_IDLE) {
-            time_t now = time(NULL);
+            
+            loop_counter++;
 
-            // A. Check if 5 seconds have passed
-            if (now - last_action_time >= 5) {
-                last_action_time = now;
+            // 2500 loops * 2000 microseconds = 5,000,000us (Exactly 5 Seconds)
+            if (loop_counter == 2500) {
                 current_action_index++;
-                log_next_action = true; // Flag to write to verifikation.txt and console
+                aktivt_beslut_fn(current_action_index);
+                
+                log_next_action = true; // Flag to print to console just once
 
-                if (current_phase == PHASE_TO_ITEM && beslut_till_vara[current_action_index] == 'X') {
+                if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
                     current_phase = PHASE_PICKUP;
                     current_action_index = 0;
+                    aktivt_beslut_fn(current_action_index);
                     printf("\n-> PHASE CHANGE: Picking up item...\n");
                 } 
                 else if (current_phase == PHASE_PICKUP) {
                     current_phase = PHASE_TO_HOME;
                     current_action_index = 0;
+                    aktivt_beslut_fn(current_action_index);
                     printf("\n-> PHASE CHANGE: Heading Home...\n");
                 } 
-                else if (current_phase == PHASE_TO_HOME && beslut_hem[current_action_index] == 'X') {
+                else if (current_phase == PHASE_TO_HOME && aktivt_beslut == 'X') {
                     current_phase = PHASE_IDLE;
                     printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
                     
-                    // Send a final stop command when route finishes
+                    // Send a final stop command
                     unsigned char stop_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 's', 0x00, 0x00, 0x00, 0xFF};
                     write(i2c_fd, stop_packet, PACKET_SIZE);
                     log_verification(stop_packet, 's');
                 }
+
+                // Reset counter for the next action cycle
+                loop_counter = 0;
             }
 
             // B. BLAST THE CURRENT ACTION CONTINUOUSLY (If still driving)
-            if (current_phase != PHASE_IDLE) {
+            if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
                 unsigned char auto_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF};
 
-                if (current_phase == PHASE_TO_ITEM) {
-                    auto_packet[3] = beslut_till_vara[current_action_index];
-                } else if (current_phase == PHASE_PICKUP) {
-                    auto_packet[2] = 0x01; // Change target to Arm
-                    auto_packet[3] = 'v';
-                } else if (current_phase == PHASE_TO_HOME) {
-                    auto_packet[3] = beslut_hem[current_action_index];
+                // Set target to Arm if picking up, otherwise Wheel
+                if (current_phase == PHASE_PICKUP) {
+                    auto_packet[2] = 0x01; 
                 }
+
+                // Inject our active decision
+                auto_packet[3] = aktivt_beslut;
 
                 // 1. SEND TO MICROCONTROLLER EVERY LOOP ITERATION
                 write(i2c_fd, auto_packet, PACKET_SIZE);
 
-                // 2. LOG / PRINT ONLY WHEN ACTION CHANGES
+                // 2. ALWAYS LOG EVERY TRANSMISSION
+                log_verification(auto_packet, auto_packet[3]);
+
+                // 3. PRINT TO CONSOLE ONLY WHEN ACTION CHANGES
                 if (log_next_action) {
-                    log_verification(auto_packet, auto_packet[3]);
                     printf("Action updated to: '%c'\n", auto_packet[3]);
                     log_next_action = false;
                 }
@@ -353,8 +377,6 @@ int main() {
         }
 
         // 3. TINY DELAY (Crucial to prevent Pi CPU from hitting 100%)
-        // 2000 microseconds = 2 milliseconds. 
-        // This ensures a continuous blast of ~500 commands per second.
         usleep(2000); 
     }
 
