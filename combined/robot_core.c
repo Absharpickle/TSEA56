@@ -7,7 +7,6 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <sys/select.h>
 #include <sys/time.h>
 #include <linux/i2c-dev.h>
 #include <errno.h>
@@ -51,7 +50,7 @@ unsigned char current_auto_state = 1;
 bool log_next_action = false;
 
 // =================================================================
-// 1. KARTA OCH HJÄLPFUNKTIONER (Från algoritm.c)
+// 1. KARTA OCH HJÄLPFUNKTIONER 
 // =================================================================
 void init_karta() {
     memset(vag, 0, sizeof(vag));
@@ -219,9 +218,6 @@ void start_autonomous_sequence(unsigned char state) {
 }
 
 // =================================================================
-// 3. HUVUDPROGRAM (NON-BLOCKING EVENT LOOP)
-// =================================================================
-// =================================================================
 // 3. HUVUDPROGRAM (TRUE CONTINUOUS NON-BLOCKING LOOP)
 // =================================================================
 int main() {
@@ -240,11 +236,16 @@ int main() {
     i2c_fd = open(I2C_DEVICE, O_RDWR);
     if (i2c_fd < 0) {
         printf("[WARNING] Failed to open I2C bus.\n");
+        printf("          -> Running in Network-Only (Simulation) mode.\n");
     } else if (ioctl(i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
         printf("[WARNING] Failed to configure I2C address 0x12.\n");
+        printf("          -> Running in Network-Only (Simulation) mode.\n");
     } else {
+        // THE PHYSICAL PROBE: Try to write 0 bytes
         if (write(i2c_fd, NULL, 0) < 0) {
-            printf("[WARNING] Microcontroller not found at 0x12! Running in Sim Mode.\n");
+            printf("[WARNING] Microcontroller not found at 0x12!\n");
+            printf("          Check your physical SDA, SCL, and GND connections.\n");
+            printf("          -> Running in Network-Only (Simulation) mode.\n");
         } else {
             printf("Successfully connected AND verified physical I2C address 0x12\n");
         }
@@ -269,7 +270,6 @@ int main() {
     // NON-BLOCKING MAIN LOOP
     while (1) {
         // 1. CHECK FOR NETWORK PACKETS (INSTANTLY, NO WAITING)
-        // MSG_DONTWAIT means it grabs a packet if it's there, or immediately returns -1 if empty.
         int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
         
         if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
@@ -288,8 +288,11 @@ int main() {
                     printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
                     current_phase = PHASE_IDLE;
                 }
+                
+                // Blast the manual command to I2C and log it
                 write(i2c_fd, buffer, PACKET_SIZE);
                 log_verification(buffer, action);
+                printf("-> Manual Command Forwarded: '%c'\n", action);
             }
         }
 
@@ -301,7 +304,7 @@ int main() {
             if (now - last_action_time >= 5) {
                 last_action_time = now;
                 current_action_index++;
-                log_next_action = true; // Flag to write to verifikation.txt just once
+                log_next_action = true; // Flag to write to verifikation.txt and console
 
                 if (current_phase == PHASE_TO_ITEM && beslut_till_vara[current_action_index] == 'X') {
                     current_phase = PHASE_PICKUP;
@@ -320,6 +323,7 @@ int main() {
                     // Send a final stop command when route finishes
                     unsigned char stop_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 's', 0x00, 0x00, 0x00, 0xFF};
                     write(i2c_fd, stop_packet, PACKET_SIZE);
+                    log_verification(stop_packet, 's');
                 }
             }
 
@@ -339,17 +343,7 @@ int main() {
                 // 1. SEND TO MICROCONTROLLER EVERY LOOP ITERATION
                 write(i2c_fd, auto_packet, PACKET_SIZE);
 
-                // 2. LOG EVERY SINGLE TRANSMISSION TO THE FILE
-                log_verification(auto_packet, auto_packet[3]);
-
-                // 3. Print to console ONLY when the action changes (so your terminal doesn't freeze!)
-                if (log_next_action) {
-                    printf("Action updated to: '%c'\n", auto_packet[3]);
-                    log_next_action = false;
-                }
-            }
-
-                // C. Write to verification log ONLY when the action changes
+                // 2. LOG / PRINT ONLY WHEN ACTION CHANGES
                 if (log_next_action) {
                     log_verification(auto_packet, auto_packet[3]);
                     printf("Action updated to: '%c'\n", auto_packet[3]);
