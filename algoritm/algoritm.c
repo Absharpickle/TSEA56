@@ -1,220 +1,252 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <unistd.h>
 
-#define NODES 27
+#define NODES 26 // 25 noder i rutnätet + 1 startnod
 #define START 25 
-#define END 26   
 #define NONE -1
 #define STOP -1
 
 char nodriktningsmatris[NODES][NODES];
-int vag[NODES][NODES];
-
-int malrutt[NODES], slutrutt[NODES];
-char malbeslut[NODES], slutbeslut[NODES];
-int mal_u, mal_v; 
+int  vag[NODES][NODES];
+int  rutt_till_vara[NODES];
+int  rutt_hem[NODES];
+char beslut_till_vara[NODES];
+char beslut_hem[NODES];
+int  vara_u, vara_v; 
 
 // =================================================================
-// 1. KARTA & HJÄLPFUNKTIONER
+// 1. KARTA OCH HJÄLPFUNKTIONER
 // =================================================================
-void init_karta(){
+void init_karta() {
     memset(vag, 0, sizeof(vag));
     memset(nodriktningsmatris, ' ', sizeof(nodriktningsmatris));
-    for (int i = 0; i < 25; i++){
-        if (i % 5 < 4) { vag[i][i+1] = 1; nodriktningsmatris[i][i+1] = 'e'; } 
-        if (i % 5 > 0) { vag[i][i-1] = 1; nodriktningsmatris[i][i-1] = 'w'; } 
-        if (i / 5 < 4) { vag[i][i+5] = 1; nodriktningsmatris[i][i+5] = 's'; } 
-        if (i / 5 > 0) { vag[i][i-5] = 1; nodriktningsmatris[i][i-5] = 'n'; } 
+    
+    for (int i = 0; i < 25; i++) {
+        int rad = i / 5;
+        int kol = i % 5;
+        if (kol < 4) { vag[i][i+1] = 1; nodriktningsmatris[i][i+1] = 'e'; } 
+        if (kol > 0) { vag[i][i-1] = 1; nodriktningsmatris[i][i-1] = 'w'; } 
+        if (rad < 4) { vag[i][i+5] = 1; nodriktningsmatris[i][i+5] = 's'; } 
+        if (rad > 0) { vag[i][i-5] = 1; nodriktningsmatris[i][i-5] = 'n'; } 
     }
-    vag[START][0] = vag[0][START] = vag[24][END] = vag[END][24] = 1;
-    nodriktningsmatris[START][0] = nodriktningsmatris[24][END] = 's';
-    nodriktningsmatris[0][START] = nodriktningsmatris[END][24] = 'n';
+    // Koppla Startplatsen till nod 0
+    vag[START][0] = 1; 
+    vag[0][START] = 1;
+    nodriktningsmatris[START][0] = 's';
+    nodriktningsmatris[0][START] = 'n';
 }
 
-void stang_av_vag(int u, int v) {
-    if (u == NONE || v == NONE) return;
-    vag[u][v] = 0;
-    vag[v][u] = 0;
-}
-
-char get_turn(char cur, char next) {
-    if (cur == next) return 'f';
-    if ((cur=='n'&&next=='e') || (cur=='e'&&next=='s') || (cur=='s'&&next=='w') || (cur=='w'&&next=='n')) return 'r';
-    if ((cur=='n'&&next=='w') || (cur=='w'&&next=='s') || (cur=='s'&&next=='e') || (cur=='e'&&next=='n')) return 'l';
+char get_turn(char nu, char nasta) {
+    if (nu == nasta) return 'f';
+    if (nu == 'n' && nasta == 'e') return 'r';
+    if (nu == 'e' && nasta == 's') return 'r';
+    if (nu == 's' && nasta == 'w') return 'r';
+    if (nu == 'w' && nasta == 'n') return 'r';
+    if (nu == 'n' && nasta == 'w') return 'l';
+    if (nu == 'w' && nasta == 's') return 'l';
+    if (nu == 's' && nasta == 'e') return 'l';
+    if (nu == 'e' && nasta == 'n') return 'l';
     return 'b';
 }
 
-char get_motsatt_riktning(char dir) {
-    if (dir == 'n') return 's';
-    if (dir == 's') return 'n';
-    if (dir == 'e') return 'w';
-    if (dir == 'w') return 'e';
-    return ' ';
+void hinder_laggtill(int hinder_u, int hinder_v){
+    vag[hinder_u][hinder_v] = 0;
+    vag[hinder_v][hinder_u] = 0;
 }
+void hinder_tabort(int hinder_u, int hinder_v){
+    vag[hinder_u][hinder_v] = 1;
+    vag[hinder_v][hinder_u] = 1;
+}
+char get_motsatt_dir(char nu) {
+    if (nu == 's') return 'n';
+    if (nu == 'n') return 's';
+    if (nu == 'e') return 'w';
+    if (nu == 'w') return 'e';
+    return nu; // Om inget matchar
+}
+
 
 void bygg_beslut(int rutt[], char start_dir, char beslut[]) {
     char dir = start_dir;
-    int i;
-    for (i = 0; rutt[i + 1] != STOP; i++) {
-        char next_dir = nodriktningsmatris[rutt[i]][rutt[i + 1]];
-        beslut[i] = get_turn(dir, next_dir);
-        dir = next_dir;
+    int i = 0;
+    while (rutt[i + 1] != STOP) {
+        char nasta_dir = nodriktningsmatris[rutt[i]][rutt[i + 1]];
+        beslut[i] = get_turn(dir, nasta_dir);
+        dir = nasta_dir;
+        i++;
     }
     beslut[i] = 'X'; 
+    beslut[i+1] = '\0';
 }
 
 // =================================================================
-// 2. DIJKSTRA 
+// 2. DIJKSTRA (SÖK ALGORITM)
 // =================================================================
-int optimeringsfunktion(int startnod, int slutnod, int rutt[], char start_riktning) {
-    int cost[NODES], prev[NODES];
-    char dir_arrived[NODES];
-    bool visited[NODES] = {false};
+int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
+    int kostnad[NODES], foregaende[NODES];
+    char riktning_in[NODES];
+    bool besokt[NODES] = {false};
 
-    for (int i = 0; i < NODES; i++) { cost[i] = 999999; prev[i] = NONE; rutt[i] = STOP; }
-    cost[startnod] = 0; dir_arrived[startnod] = start_riktning;
+    for (int i = 0; i < NODES; i++) {
+        kostnad[i] = 9999;
+        foregaende[i] = NONE;
+        rutt[i] = STOP;
+    }
 
-    for (int count = 0; count < NODES; count++) {
-        int min_cost = 999999, u = -1;
-        for (int i = 0; i < NODES; i++) {
-            if (!visited[i] && cost[i] < min_cost) { min_cost = cost[i]; u = i; }
+    kostnad[start] = 0;
+    riktning_in[start] = start_dir;
+
+    for (int i = 0; i < NODES; i++) {
+        int u = -1;
+        for (int j = 0; j < NODES; j++) {
+            if (!besokt[j] && (u == -1 || kostnad[j] < kostnad[u])) u = j;
         }
-        if (u == -1 || u == slutnod) break;
-        visited[u] = true;
+
+        if (kostnad[u] == 9999 || u == mal) break;
+        besokt[u] = true;
 
         for (int v = 0; v < NODES; v++) {
-            if (vag[u][v] && !visited[v]) {
-                char move_dir = nodriktningsmatris[u][v];
-                int alt = cost[u] + 100 + (dir_arrived[u] == move_dir ? 0 : 1);
-                if (alt < cost[v]) { cost[v] = alt; prev[v] = u; dir_arrived[v] = move_dir; }
+            if (vag[u][v] && !besokt[v]) {
+                char nasta_dir = nodriktningsmatris[u][v];
+                int straff = 0;
+                if (riktning_in[u] != nasta_dir) straff = 1;
+                
+                int ny_kostnad = kostnad[u] + 100 + straff;
+                if (ny_kostnad < kostnad[v]) {
+                    kostnad[v] = ny_kostnad;
+                    foregaende[v] = u;
+                    riktning_in[v] = nasta_dir;
+                }
             }
         }
     }
 
-    int temp[NODES], c = 0, curr = slutnod;
-    while (curr != NONE) { temp[c++] = curr; curr = prev[curr]; }
+    int temp[NODES], c = 0, nu = mal;
+    while (nu != NONE) {
+        temp[c++] = nu;
+        nu = foregaende[nu];
+    }
     for (int i = 0; i < c; i++) rutt[i] = temp[c - 1 - i];
-
-    return cost[slutnod]; 
+    return kostnad[mal];
 }
 
 // =================================================================
-// 3. DYNAMISK RUTTBERÄKNING
+// 3. RUTTHANTERING
 // =================================================================
-void uppdatera_fas1_och_2(int startnod, char start_riktning) {
-    int rutt_u[NODES], rutt_v[NODES];
-    int cost_u = optimeringsfunktion(startnod, mal_u, rutt_u, start_riktning);
-    int cost_v = optimeringsfunktion(startnod, mal_v, rutt_v, start_riktning);
+void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) {
+    int rutt_alt1[NODES];
+    int rutt_alt2[NODES];
     
-    int ingang = (cost_u <= cost_v) ? mal_u : mal_v;
-    int utgang = (ingang == mal_u) ? mal_v : mal_u;
-    int *vald_in = (cost_u <= cost_v) ? rutt_u : rutt_v;
-
-    int i;
-    for (i = 0; vald_in[i] != STOP; i++) malrutt[i] = vald_in[i];
-    malrutt[i] = utgang; 
-    malrutt[i+1] = STOP;
-    bygg_beslut(malrutt, start_riktning, malbeslut);
-
-    int slut_framat[NODES], slut_bakom[NODES];
-    int cost_fram = optimeringsfunktion(utgang, END, slut_framat, nodriktningsmatris[ingang][utgang]); 
-    int cost_bak  = optimeringsfunktion(ingang, END, slut_bakom, nodriktningsmatris[utgang][ingang]) + 1; 
+    // 1. Hitta bästa väg TILL varan
+    int kostnad1 = hitta_rutt(nuvarande_nod, vara_u, rutt_alt1, nuvarande_dir);
+    int kostnad2 = hitta_rutt(nuvarande_nod, vara_v, rutt_alt2, nuvarande_dir);
     
-    if (cost_fram <= cost_bak) {
-        slutrutt[0] = ingang; 
-        for (i = 0; slut_framat[i] != STOP; i++) slutrutt[i+1] = slut_framat[i];
-        slutrutt[i+1] = STOP;
-        bygg_beslut(slutrutt, nodriktningsmatris[ingang][utgang], slutbeslut);
+    int ingang, utgang;
+    if (kostnad1 <= kostnad2) {
+        ingang = vara_u;
+        utgang = vara_v;
+        memcpy(rutt_till_vara, rutt_alt1, sizeof(rutt_alt1));
     } else {
-        slutrutt[0] = utgang; 
-        for (i = 0; slut_bakom[i] != STOP; i++) slutrutt[i+1] = slut_bakom[i];
-        slutrutt[i+1] = STOP;
-        bygg_beslut(slutrutt, nodriktningsmatris[utgang][ingang], slutbeslut);
+        ingang = vara_v;
+        utgang = vara_u;
+        memcpy(rutt_till_vara, rutt_alt2, sizeof(rutt_alt2));
+    }
+
+    // Lägg till utgångsnoden i rutt_till_vara för att roboten ska köra in i krysset
+    int i = 0;
+    while (rutt_till_vara[i] != STOP) i++;
+    rutt_till_vara[i] = utgang;
+    rutt_till_vara[i+1] = STOP;
+
+    // Bygg besluten för resan till varan
+    bygg_beslut(rutt_till_vara, nuvarande_dir, beslut_till_vara);
+    
+// ... (efter att rutt_till_vara är klar)
+
+    // 2. Planera resan HEM
+    char dir_vid_vara = nodriktningsmatris[ingang][utgang]; // Riktningen roboten har i mitten
+    
+    int cost_utgang = hitta_rutt(utgang, START, rutt_alt1, dir_vid_vara);
+    // Vi lägger på ett straff (t.ex. 101) för att markera att vända/backa är dyrare än att bara köra på
+    int cost_ingang = hitta_rutt(ingang, START, rutt_alt2, dir_vid_vara) + 100; 
+
+ if (cost_utgang <= cost_ingang) {
+        // --- ALTERNATIV: FRAMÅT ---
+        memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
+        bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
+        // Här behövs ingen memmove! bygg_beslut har redan lagt 'f' 
+        // om riktningen stämmer, eller 'r'/'l' om utgångsnoden kräver en sväng.
+    } 
+    else {
+        // --- ALTERNATIV: VÄNDA ---
+        memcpy(rutt_hem, rutt_alt2, sizeof(rutt_alt2));
+        
+        // Vi räknar ut riktningen roboten har EFTER att den vänt 180 grader
+        char dir_efter_vanding = get_motsatt_dir(dir_vid_vara);
+        
+        // Bygg besluten utifrån den NYA riktningen
+        bygg_beslut(rutt_hem, dir_efter_vanding, beslut_hem);
+        
+        // Skjut in vändningen 'b' ALLRA först
+        int len = strlen(beslut_hem) + 1;
+        memmove(&beslut_hem[1], &beslut_hem[0], len);
+        beslut_hem[0] = 'b'; 
     }
 }
-
-void uppdatera_fas2(int startnod, char start_riktning) {
-    optimeringsfunktion(startnod, END, slutrutt, start_riktning);
-    bygg_beslut(slutrutt, start_riktning, slutbeslut);
-}
-
 // =================================================================
-// 4. DATA UTSKRIFT OCH HINDERSIMULATOR
+// 4. UTSKRIFT OCH SIMULERING
 // =================================================================
-void print_fas1() {
-    printf("FAS 1 | Noder: ");
-    for (int i = 0; malrutt[i] != STOP; i++) {
-        if (malrutt[i+1] == STOP) printf("[MITTEN]\n");
-        else printf("%d ", malrutt[i]);
-    }
-    printf("FAS 1 | Kommandon: ");
-    for (int i = 0; malbeslut[i] != '\0'; i++) printf("%c ", malbeslut[i]);
+void print_rutt(char label[], int rutt[], char beslut[]) {
+    printf("%s | Noder: ", label);
+    for (int i = 0; rutt[i] != STOP; i++) printf("%d ", rutt[i]);
+    printf("\n%s | Beslut: ", label);
+    for (int i = 0; beslut[i] != '\0'; i++) printf("%c ", beslut[i]);
     printf("\n\n");
 }
 
-void print_fas2(bool offset) {
-    printf("FAS 2 | Noder: [MITTEN] ");
-    int start_i = offset ? 1 : 0;
-    for (int i = start_i; slutrutt[i] != STOP; i++) printf("%d ", slutrutt[i]);
-    printf("\nFAS 2 | Kommandon: ");
-    for (int i = 0; slutbeslut[i] != '\0'; i++) printf("%c ", slutbeslut[i]);
-    printf("\n\n");
-}
+void simulator() {
+    vara_u = 6; 
+    vara_v = 7; 
+    char start_dir = 's'; 
+    
+    printf("Planerar resa...\n");
+    planera_hela_resan(START, start_dir);
+    print_rutt("STARTRUTT (Till Varan)", rutt_till_vara, beslut_till_vara);
+    print_rutt("SLUTRUTT  (Hemresa)   ", rutt_hem, beslut_hem);
+    sleep(1); // En kort paus räcker oftast
 
-void kolla_och_applicera_hinder_fas1(int h_u, int h_v) {
-    if (h_u == NONE || h_v == NONE) return;
-    for (int i = 0; malrutt[i+1] != STOP; i++) {
-        if ((malrutt[i] == h_u && malrutt[i+1] == h_v) || (malrutt[i] == h_v && malrutt[i+1] == h_u)) {
-            int nuvarande_nod = malrutt[i];
-            stang_av_vag(h_u, h_v);
-            char riktning = nodriktningsmatris[nuvarande_nod][malrutt[i+1]];
-            uppdatera_fas1_och_2(nuvarande_nod, get_motsatt_riktning(riktning));
-            printf(">>> HINDER %d-%d HITTTAT! NY RUTT BERÄKNAD:\n", h_u, h_v);
-            print_fas1(); print_fas2(true);
-            return;
+    // RESAN TILL VARAN
+    printf("Resa till vara: ");
+    for(int i = 0; i < NODES; i++) {
+        if (beslut_till_vara[i] == 'X') {
+            break;
         }
+        printf("%c ", beslut_till_vara[i]); // %c krävs för char
+        fflush(stdout); // Tvingar terminalen att skriva ut direkt trots sleep
+        sleep(5); 
     }
-}
+    
+    printf("\n[STOPP] Plockar upp vara... (Väntar 5 sekunder)\n");
+    sleep(5);
 
-void kolla_och_applicera_hinder_fas2(int h_u, int h_v) {
-    if (h_u == NONE || h_v == NONE) return;
-    for (int i = 0; slutrutt[i+1] != STOP; i++) {
-        if ((slutrutt[i] == h_u && slutrutt[i+1] == h_v) || (slutrutt[i] == h_v && slutrutt[i+1] == h_u)) {
-            int nuvarande_nod = slutrutt[i];
-            stang_av_vag(h_u, h_v);
-            char riktning = nodriktningsmatris[nuvarande_nod][slutrutt[i+1]];
-            uppdatera_fas2(nuvarande_nod, get_motsatt_riktning(riktning));
-            printf(">>> HINDER %d-%d HITTTAT PÅ VÄG HEM! NY RUTT BERÄKNAD:\n", h_u, h_v);
-            print_fas2(false);
-            return;
+    // RESAN HEM
+    printf("Resa hem: ");
+    for(int i = 0; i < NODES; i++) {
+        if (beslut_hem[i] == 'X') {
+            break;
         }
+        printf("%c ", beslut_hem[i]); // Använd beslut_hem här
+        fflush(stdout);
+        sleep(5);
     }
+    printf("\n[FRAMME] Hemma vid START!\n");
 }
 
-// =================================================================
-// MAIN
-// =================================================================
+
 int main() {
     init_karta();
-    
-    // --- KONFIGURATION ---
-    mal_u = 16; 
-    mal_v = 17; 
-    char start_riktning = 's'; 
-    
-    // Ändra dessa för att testa hinder! (Sätt till NONE för att stänga av hindret)
-    int hinder1_u = 10, hinder1_v = 15; // Hinder på ditvägen
-    int hinder2_u = 18, hinder2_v = 19; // Hinder på hemvägen
-    // ---------------------
-
-    printf("=== INITIAL RUTT ===\n");
-    uppdatera_fas1_och_2(START, start_riktning);
-    print_fas1(); 
-    print_fas2(true);
-
-    kolla_och_applicera_hinder_fas1(hinder1_u, hinder1_v);
-    kolla_och_applicera_hinder_fas2(hinder2_u, hinder2_v);
-
+    simulator();
     return 0;
 }
