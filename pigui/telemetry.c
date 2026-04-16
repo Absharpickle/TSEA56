@@ -93,7 +93,9 @@ int main() {
                 printf("%02X ", buffer[i]);
             }
             printf("\n");
-
         }
-        
+    }
+
+    close(sockfd);
+    return 0;
 }   
