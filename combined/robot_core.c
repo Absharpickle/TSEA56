@@ -7,6 +7,8 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <linux/i2c-dev.h>
 #include <errno.h>
 #include <time.h>
@@ -34,13 +36,26 @@ char beslut_till_vara[NODES];
 char beslut_hem[NODES];
 int  vara_u, vara_v; 
 
+// --- STATE MACHINE GLOBALS ---
+typedef enum {
+    PHASE_IDLE = 0,
+    PHASE_TO_ITEM,
+    PHASE_PICKUP,
+    PHASE_TO_HOME
+} AutoPhase;
+
+AutoPhase current_phase = PHASE_IDLE;
+int current_action_index = 0;
+time_t last_action_time = 0;
+unsigned char current_auto_state = 1;
+bool log_next_action = false;
+
 // =================================================================
 // 1. KARTA OCH HJÄLPFUNKTIONER (Från algoritm.c)
 // =================================================================
 void init_karta() {
     memset(vag, 0, sizeof(vag));
     memset(nodriktningsmatris, ' ', sizeof(nodriktningsmatris));
-    
     for (int i = 0; i < 25; i++) {
         int rad = i / 5;
         int kol = i % 5;
@@ -173,7 +188,7 @@ void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) {
 }
 
 // =================================================================
-// 2. I2C & TELEMETRY FUNKTIONER
+// 2. I2C, TELEMETRY & AUTO-INIT FUNKTIONER
 // =================================================================
 void log_verification(const unsigned char *sent, char action) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
@@ -186,71 +201,40 @@ void log_verification(const unsigned char *sent, char action) {
     fclose(f);
 }
 
-// Denna funktion ersätter 'simulator()'
-void run_autonomous_sequence(int i2c_fd, unsigned char state) {
+void start_autonomous_sequence(unsigned char state) {
     vara_u = 6; 
     vara_v = 7; 
-    char start_dir = 's'; 
     
-    printf("\n=== STARTAR AUTONOM RUTT ===\n");
-    planera_hela_resan(START, start_dir);
-
-    unsigned char auto_packet[8] = {0x05, state, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF};
-
-    // 1. RESAN TILL VARAN
-    printf("Resa till vara: \n");
-    for(int i = 0; i < NODES; i++) {
-        if (beslut_till_vara[i] == 'X') break;
-        
-        auto_packet[3] = beslut_till_vara[i]; // Insert action (f, r, l, b)
-        write(i2c_fd, auto_packet, PACKET_SIZE);
-        log_verification(auto_packet, beslut_till_vara[i]);
-        
-        printf("-> Skickade auto-beslut: %c\n", beslut_till_vara[i]);
-        sleep(5); 
-    }
+    printf("\n=== CALCULATING AUTONOMOUS ROUTE ===\n");
+    planera_hela_resan(START, 's');
     
-    // 2. PLOCKA UPP VARA (Simulerar armkommando)
-    printf("[STOPP] Plockar upp vara...\n");
-    auto_packet[2] = 0x01; // Byt target till arm
-    auto_packet[3] = 'v';  // Plocka
-    write(i2c_fd, auto_packet, PACKET_SIZE);
-    sleep(5);
-    auto_packet[2] = 0x00; // Tillbaka till wheel
-
-    // 3. RESAN HEM
-    printf("Resa hem: \n");
-    for(int i = 0; i < NODES; i++) {
-        if (beslut_hem[i] == 'X') break;
-        
-        auto_packet[3] = beslut_hem[i];
-        write(i2c_fd, auto_packet, PACKET_SIZE);
-        log_verification(auto_packet, beslut_hem[i]);
-        
-        printf("-> Skickade auto-beslut: %c\n", beslut_hem[i]);
-        sleep(5);
-    }
-    printf("=== AUTONOM RUTT KLAR ===\n\n");
+    // Initialize the State Machine
+    current_auto_state = state;
+    current_phase = PHASE_TO_ITEM;
+    current_action_index = 0;
+    last_action_time = time(NULL);
+    log_next_action = true; // Force the very first action to log
+    
+    printf("-> Route Calculated. Driving to item...\n");
 }
 
 // =================================================================
-// 3. HUVUDPROGRAM (EVENT LOOP)
+// 3. HUVUDPROGRAM (NON-BLOCKING EVENT LOOP)
 // =================================================================
 int main() {
     int sockfd, i2c_fd;
     struct sockaddr_in servaddr, cliaddr;
     unsigned char buffer[BUFFER_SIZE];
     socklen_t len = sizeof(cliaddr);
+    fd_set readfds;
+    struct timeval tv;
 
-    // Initialisera karta
     init_karta();
 
-    // Rensa logg
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
-    printf("--- PI CORE: UDP -> I2C + AUTONOMOUS ---\n");
+    printf("--- PI CORE: CONTINUOUS I2C + NON-BLOCKING UDP ---\n");
 
-    // SETUP I2C
     i2c_fd = open(I2C_DEVICE, O_RDWR);
     if (i2c_fd < 0 || ioctl(i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
         perror("Failed to connect to I2C");
@@ -258,7 +242,6 @@ int main() {
     }
     printf("I2C Connected (0x12)\n");
 
-    // SETUP UDP
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -274,33 +257,88 @@ int main() {
     }
     printf("Listening for UDP on port %d...\n\n", UDP_PORT);
 
-    // MAIN LOOP
+    // NON-BLOCKING MAIN LOOP
     while (1) {
-        int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_WAITALL, (struct sockaddr *)&cliaddr, &len);
-        if (n < 0) continue;
+        // Setup select() to wait a maximum of 50ms for a network packet
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 50000; // 50ms (Creates a 20Hz Loop)
 
-        if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
-            unsigned char state = buffer[1];
-            unsigned char target = buffer[2];
-            char action = (char)buffer[3];
+        int activity = select(sockfd + 1, &readfds, NULL, NULL, &tv);
 
-            printf("Packet (State: %d, Target: %d, Action: %c)\n", state, target, action);
+        // --- NETWORK EVENT HANDLING ---
+        if (activity > 0 && FD_ISSET(sockfd, &readfds)) {
+            int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_WAITALL, (struct sockaddr *)&cliaddr, &len);
+            
+            if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
+                unsigned char state = buffer[1];
+                unsigned char target = buffer[2];
+                char action = (char)buffer[3];
 
-            // --- ROUTING LOGIC ---
-            if (state == 1 || state == 2) {
-                // AUTONOMOUS MODE
-                // Vi använder 'f' (Pil Upp) för att starta sekvensen!
-                if (action == 'f') {
-                    run_autonomous_sequence(i2c_fd, state);
-                } else {
-                    printf("I Auto mode. Tryck Upp ('f') för att starta rutten.\n");
-                }
-            } else {
-                // MANUAL MODE (State 3 or 4)
-                ssize_t written = write(i2c_fd, buffer, PACKET_SIZE);
-                if (written == PACKET_SIZE) {
+                if (state == 1 || state == 2) {
+                    if (action == 'f' && current_phase == PHASE_IDLE) {
+                        start_autonomous_sequence(state);
+                    }
+                } else if (state == 3 || state == 4) {
+                    // MANUAL OVERRIDE: If a manual command arrives, kill auto route
+                    if (current_phase != PHASE_IDLE) {
+                        printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+                        current_phase = PHASE_IDLE;
+                    }
+                    write(i2c_fd, buffer, PACKET_SIZE);
                     log_verification(buffer, action);
-                    printf("-> I2C Manual Forwarding: %c\n", action);
+                }
+            }
+        }
+
+        // --- AUTONOMOUS STATE MACHINE (Runs Continuously) ---
+        if (current_phase != PHASE_IDLE) {
+            time_t now = time(NULL);
+
+            // 1. Check if 5 seconds have passed to advance the route
+            if (now - last_action_time >= 5) {
+                last_action_time = now;
+                current_action_index++;
+                log_next_action = true; // Tell the system to log this new change
+
+                if (current_phase == PHASE_TO_ITEM && beslut_till_vara[current_action_index] == 'X') {
+                    current_phase = PHASE_PICKUP;
+                    current_action_index = 0;
+                    printf("\n-> PHASE CHANGE: Picking up item...\n");
+                } 
+                else if (current_phase == PHASE_PICKUP) {
+                    current_phase = PHASE_TO_HOME;
+                    current_action_index = 0;
+                    printf("\n-> PHASE CHANGE: Heading Home...\n");
+                } 
+                else if (current_phase == PHASE_TO_HOME && beslut_hem[current_action_index] == 'X') {
+                    current_phase = PHASE_IDLE;
+                    printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
+                }
+            }
+
+            // 2. Continously blast the current action down I2C
+            if (current_phase != PHASE_IDLE) {
+                unsigned char auto_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF};
+
+                if (current_phase == PHASE_TO_ITEM) {
+                    auto_packet[3] = beslut_till_vara[current_action_index];
+                } else if (current_phase == PHASE_PICKUP) {
+                    auto_packet[2] = 0x01; // Change target to Arm
+                    auto_packet[3] = 'v';
+                } else if (current_phase == PHASE_TO_HOME) {
+                    auto_packet[3] = beslut_hem[current_action_index];
+                }
+
+                // Blast it down the wire!
+                write(i2c_fd, auto_packet, PACKET_SIZE);
+
+                // 3. Only write to the verifikation.txt file ONCE per change
+                if (log_next_action) {
+                    log_verification(auto_packet, auto_packet[3]);
+                    printf("Action updated to: '%c'\n", auto_packet[3]);
+                    log_next_action = false;
                 }
             }
         }
