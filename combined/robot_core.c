@@ -221,41 +221,36 @@ void start_autonomous_sequence(unsigned char state) {
 // =================================================================
 // 3. HUVUDPROGRAM (NON-BLOCKING EVENT LOOP)
 // =================================================================
+// =================================================================
+// 3. HUVUDPROGRAM (TRUE CONTINUOUS NON-BLOCKING LOOP)
+// =================================================================
 int main() {
     int sockfd, i2c_fd;
     struct sockaddr_in servaddr, cliaddr;
     unsigned char buffer[BUFFER_SIZE];
     socklen_t len = sizeof(cliaddr);
-    fd_set readfds;
-    struct timeval tv;
 
     init_karta();
 
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
-    printf("--- PI CORE: CONTINUOUS I2C + NON-BLOCKING UDP ---\n");
+    printf("--- PI CORE: TRUE CONTINUOUS I2C + NON-BLOCKING UDP ---\n");
 
     // SETUP I2C
     i2c_fd = open(I2C_DEVICE, O_RDWR);
     if (i2c_fd < 0) {
-        printf("[WARNING] Failed to open I2C bus (/dev/i2c-1).\n");
-        printf("          -> Running in Network-Only (Simulation) mode.\n");
+        printf("[WARNING] Failed to open I2C bus.\n");
+    } else if (ioctl(i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
+        printf("[WARNING] Failed to configure I2C address 0x12.\n");
     } else {
-        if (ioctl(i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
-            printf("[WARNING] Failed to configure I2C address 0x12.\n");
-            printf("          -> Running in Network-Only (Simulation) mode.\n");
+        if (write(i2c_fd, NULL, 0) < 0) {
+            printf("[WARNING] Microcontroller not found at 0x12! Running in Sim Mode.\n");
         } else {
-            // THE PHYSICAL PROBE: Try to write 0 bytes
-            if (write(i2c_fd, NULL, 0) < 0) {
-                printf("[WARNING] Microcontroller not found at 0x12!\n");
-                printf("          Check your physical SDA, SCL, and GND connections.\n");
-                printf("          -> Running in Network-Only (Simulation) mode.\n");
-            } else {
-                printf("Successfully connected AND verified physical I2C address 0x12\n");
-            }
+            printf("Successfully connected AND verified physical I2C address 0x12\n");
         }
     }
 
+    // SETUP UDP
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -273,48 +268,40 @@ int main() {
 
     // NON-BLOCKING MAIN LOOP
     while (1) {
-        // Setup select() to wait a maximum of 50ms for a network packet
-        FD_ZERO(&readfds);
-        FD_SET(sockfd, &readfds);
-        tv.tv_sec = 0;
-        tv.tv_usec = 50000; // 50ms (Creates a 20Hz Loop)
+        // 1. CHECK FOR NETWORK PACKETS (INSTANTLY, NO WAITING)
+        // MSG_DONTWAIT means it grabs a packet if it's there, or immediately returns -1 if empty.
+        int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
+        
+        if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
+            unsigned char state = buffer[1];
+            unsigned char target = buffer[2];
+            char action = (char)buffer[3];
 
-        int activity = select(sockfd + 1, &readfds, NULL, NULL, &tv);
-
-        // --- NETWORK EVENT HANDLING ---
-        if (activity > 0 && FD_ISSET(sockfd, &readfds)) {
-            int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_WAITALL, (struct sockaddr *)&cliaddr, &len);
-            
-            if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
-                unsigned char state = buffer[1];
-                unsigned char target = buffer[2];
-                char action = (char)buffer[3];
-
-                if (state == 1 || state == 2) {
-                    if (action == 'f' && current_phase == PHASE_IDLE) {
-                        start_autonomous_sequence(state);
-                    }
-                } else if (state == 3 || state == 4) {
-                    // MANUAL OVERRIDE: If a manual command arrives, kill auto route
-                    if (current_phase != PHASE_IDLE) {
-                        printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
-                        current_phase = PHASE_IDLE;
-                    }
-                    write(i2c_fd, buffer, PACKET_SIZE);
-                    log_verification(buffer, action);
+            if (state == 1 || state == 2) {
+                // Start Auto Mode if 'f' is pressed
+                if (action == 'f' && current_phase == PHASE_IDLE) {
+                    start_autonomous_sequence(state);
                 }
+            } else if (state == 3 || state == 4) {
+                // MANUAL OVERRIDE: Kill auto route if manual command arrives
+                if (current_phase != PHASE_IDLE) {
+                    printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+                    current_phase = PHASE_IDLE;
+                }
+                write(i2c_fd, buffer, PACKET_SIZE);
+                log_verification(buffer, action);
             }
         }
 
-        // --- AUTONOMOUS STATE MACHINE (Runs Continuously) ---
+        // 2. AUTONOMOUS STATE MACHINE (RUNS CONTINUOUSLY)
         if (current_phase != PHASE_IDLE) {
             time_t now = time(NULL);
 
-            // 1. Check if 5 seconds have passed to advance the route
+            // A. Check if 5 seconds have passed
             if (now - last_action_time >= 5) {
                 last_action_time = now;
                 current_action_index++;
-                log_next_action = true; // Tell the system to log this new change
+                log_next_action = true; // Flag to write to verifikation.txt just once
 
                 if (current_phase == PHASE_TO_ITEM && beslut_till_vara[current_action_index] == 'X') {
                     current_phase = PHASE_PICKUP;
@@ -329,10 +316,14 @@ int main() {
                 else if (current_phase == PHASE_TO_HOME && beslut_hem[current_action_index] == 'X') {
                     current_phase = PHASE_IDLE;
                     printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
+                    
+                    // Send a final stop command when route finishes
+                    unsigned char stop_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 's', 0x00, 0x00, 0x00, 0xFF};
+                    write(i2c_fd, stop_packet, PACKET_SIZE);
                 }
             }
 
-            // 2. Continously blast the current action down I2C
+            // B. BLAST THE CURRENT ACTION CONTINUOUSLY (If still driving)
             if (current_phase != PHASE_IDLE) {
                 unsigned char auto_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF};
 
@@ -345,13 +336,25 @@ int main() {
                     auto_packet[3] = beslut_hem[current_action_index];
                 }
 
-                // Blast it down the wire!
+                // -> SEND TO MICROCONTROLLER EVERY LOOP ITERATION <-
                 write(i2c_fd, auto_packet, PACKET_SIZE);
+
+                // C. Write to verification log ONLY when the action changes
+                if (log_next_action) {
+                    log_verification(auto_packet, auto_packet[3]);
+                    printf("Action updated to: '%c'\n", auto_packet[3]);
+                    log_next_action = false;
+                }
             }
         }
+
+        // 3. TINY DELAY (Crucial to prevent Pi CPU from hitting 100%)
+        // 2000 microseconds = 2 milliseconds. 
+        // This ensures a continuous blast of ~500 commands per second.
+        usleep(2000); 
     }
 
     close(sockfd);
-    close(i2c_fd);
+    if (i2c_fd >= 0) close(i2c_fd);
     return 0;
 }
