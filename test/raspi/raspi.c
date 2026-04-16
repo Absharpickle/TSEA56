@@ -4,54 +4,78 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
+#include <errno.h>
 #include <string.h>
 
-void log_comparison(uint8_t* sent, uint8_t* received) {
-    FILE *f = fopen("validering.txt", "a");
-    if (f == NULL) return;
+/*
+ * Förväntat paketformat från Sensormodulen (8 bytes):
+ * [0]: status (bitmask)
+ * [1-2]: dev0 (int16_t) - Linjeavvikelse sensorrad 0
+ * [3-4]: dev1 (int16_t) - Linjeavvikelse sensorrad 1
+ * [5]: dist (uint8_t)   - IR-avstånd
+ * [6-7]: omega (int16_t)- Gyrovärde
+ */
 
-    fprintf(f, "SKICKAT:  ");
-    for(int i=0; i<8; i++) fprintf(f, "%02X ", sent[i]);
+int main() {
+    int file;
+    const char *device = "/dev/i2c-1";
+    int addr = 0x11;
+    uint8_t buffer[8];
 
-    fprintf(f, "\nMOTTAGET: ");
-    for(int i=0; i<8; i++) fprintf(f, "%02X ", received[i]);
-
-    if (memcmp(sent, received, 8) == 0) {
-        fprintf(f, " | STATUS: MATCH ✔️\n\n");
-    } else {
-        fprintf(f, " | STATUS: FEL ❌\n\n");
+    // 1. Öppna bussen
+    if ((file = open(device, O_RDWR)) < 0) {
+        fprintf(stderr, "FEL: Kunde inte öppna %s. %s\n", device, strerror(errno));
+        return 1;
     }
-    fclose(f);
-}
 
-    int main() {
-        int file;
-        uint8_t buffer_from_sensor[8];
-        uint8_t buffer_back_from_mottagare[8];
+    // 2. Sätt slav-adress
+    if (ioctl(file, I2C_SLAVE, addr) < 0) {
+        fprintf(stderr, "FEL: Kunde inte ansluta till slav 0x%02X. %s\n", addr, strerror(errno));
+        close(file);
+        return 1;
+    }
 
-        if ((file = open("/dev/i2c-1", O_RDWR)) < 0) return 1;
+    printf("--- I2C MONITOR STARTAD (Slav 0x%02X) ---\n", addr);
+    printf("Status |  Dev0 |  Dev1 | Dist |  Gyro | Rådata (HEX)\n");
+    printf("----------------------------------------------------\n");
 
     while (1) {
-        // 1. LÄS FRÅN SENSOR (0x11)
-        ioctl(file, I2C_SLAVE, 0x11);
-        if (read(file, buffer_from_sensor, 8) == 8) {
-
-            // 2. SKRIV TILL MOTTAGARE (0x12)
-            ioctl(file, I2C_SLAVE, 0x12);
-            
-            if (write(file, buffer_from_sensor, 8) == 8) {
-                
-                // 3. LÄS TILLBAKA FRÅN MOTTAGARE (0x12)
-                usleep(5000); // Liten paus så AVR hinner förbereda ISR
-                if (read(file, buffer_back_from_mottagare, 8) == 8) {
-                    printf("Verifikation klar. Kolla validering.txt\n");
-                    log_comparison(buffer_from_sensor, buffer_back_from_mottagare);
-                }
-            }
-        }
+        // 3. Läs data
+        int bytes_read = read(file, buffer, 8);
         
-        usleep(100000); // 100ms paus
-        usleep(100000); 
+        if (bytes_read == 8) {
+            // Tolka Little Endian (samma som i din AVR-kod)
+            uint8_t stat  = buffer[0];
+            int16_t dev0  = (int16_t)(buffer[1] | (buffer[2] << 8));
+            int16_t dev1  = (int16_t)(buffer[3] | (buffer[4] << 8));
+            uint8_t dist  = buffer[5];
+            int16_t omega = (int16_t)(buffer[6] | (buffer[7] << 8));
+
+            // Printa formaterat i terminalen
+            printf(" 0x%02X  | %5d | %5d | %4u | %5d | ", 
+                   stat, dev0, dev1, dist, omega);
+            
+            // Printa även rådata i HEX för felsökning
+            for(int i=0; i<8; i++) {
+                printf("%02X ", buffer[i]);
+            }
+            printf("\n");
+
+        } else if (bytes_read < 0) {
+            fprintf(stderr, "\nLäsfel: %s\n", strerror(errno));
+            // Om bussen hänger sig kan man behöva vänta lite innan nytt försök
+            sleep(1);
+        } else {
+            printf("\nVarning: Läste bara %d bytes.\n", bytes_read);
+        }
+
+        // Tvinga terminalen att skriva ut direkt
+        fflush(stdout);
+
+        // 100ms paus
+        usleep(100000);
     }
+
+    close(file);
     return 0;
 }
