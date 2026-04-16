@@ -336,8 +336,18 @@ int main() {
                     auto_packet[3] = beslut_hem[current_action_index];
                 }
 
-                // -> SEND TO MICROCONTROLLER EVERY LOOP ITERATION <-
+                // 1. SEND TO MICROCONTROLLER EVERY LOOP ITERATION
                 write(i2c_fd, auto_packet, PACKET_SIZE);
+
+                // 2. LOG EVERY SINGLE TRANSMISSION TO THE FILE
+                log_verification(auto_packet, auto_packet[3]);
+
+                // 3. Print to console ONLY when the action changes (so your terminal doesn't freeze!)
+                if (log_next_action) {
+                    printf("Action updated to: '%c'\n", auto_packet[3]);
+                    log_next_action = false;
+                }
+            }
 
                 // C. Write to verification log ONLY when the action changes
                 if (log_next_action) {
