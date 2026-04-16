@@ -61,7 +61,7 @@ int main() {
     }
 
     printf("Listening for packages on port %d...\n", PORT);
-    printf("Initial State: %s\n", system_state, get_state_str(system_state));
+    printf("Initial State: %d %s\n", system_state, get_state_str(system_state));
 
     // Listening loop
     while (1) {
@@ -84,7 +84,7 @@ int main() {
             printf("packet recieved from %s:%d\n", inet_ntoa(cliaddr.sin_addr), ntohs(cliaddr.sin_port));
             printf("Run state: %d %s\n", state, get_state_str(state));
             printf("Target: %s\n", get_target_str(target));
-            printf("Action: %c\n", action, buffer[3]);
+            printf("Action: %c\n", action);
 
             printf("Sensor data: [%02X, %02X, %02X]\n", buffer[4], buffer[5], buffer[6]);
         } else {
