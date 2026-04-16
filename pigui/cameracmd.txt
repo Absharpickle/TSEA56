@@ -1,0 +1,1 @@
+rpicam-vid -t 0 -n --inline --width 640 --height 480 --framerate 30 --codec h264 --intra 1 --flush -o udp://10.42.0.2:5000
