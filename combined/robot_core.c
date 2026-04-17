@@ -11,6 +11,7 @@
 #include <linux/i2c-dev.h>
 #include <errno.h>
 #include <time.h>
+#include <stdint.h> // Required for int16_t and uint8_t
 
 // --- ALGORITHM DEFINITIONS ---
 #define NODES 26
@@ -23,6 +24,7 @@
 #define BUFFER_SIZE 1024
 #define I2C_DEVICE "/dev/i2c-1"
 #define STYRKOMM_ADDR 0x12
+#define SENSOR_ADDR 0x10    // NEW: Sensor I2C Address
 #define PACKET_SIZE 8
 #define VERIFY_LOG_FILE "verifikation_keys.txt"
 
@@ -220,12 +222,10 @@ void start_autonomous_sequence(unsigned char state) {
     printf("\n=== CALCULATING AUTONOMOUS ROUTE ===\n");
     planera_hela_resan(START, 's');
     
-    // Initialize the State Machine
     current_auto_state = state;
     current_phase = PHASE_TO_ITEM;
     current_action_index = 0;
     
-    // Reset counter and fetch the very first instruction
     loop_counter = 0;
     aktivt_beslut_fn(current_action_index); 
     log_next_action = true; 
@@ -237,33 +237,41 @@ void start_autonomous_sequence(unsigned char state) {
 // 3. HUVUDPROGRAM (TRUE CONTINUOUS NON-BLOCKING LOOP)
 // =================================================================
 int main() {
-    int sockfd, i2c_fd;
+    int sockfd, i2c_styr_fd, i2c_sens_fd;
     struct sockaddr_in servaddr, cliaddr;
     unsigned char buffer[BUFFER_SIZE];
     socklen_t len = sizeof(cliaddr);
+
+    // Globals to hold the incoming sensor values
+    uint8_t line_var = 0;
+    uint8_t gyro1 = 0;
+    uint8_t gyro2 = 0;
 
     init_karta();
 
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
-    printf("--- PI CORE: TRUE CONTINUOUS I2C + NON-BLOCKING UDP ---\n");
+    printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
-    // SETUP I2C
-    i2c_fd = open(I2C_DEVICE, O_RDWR);
-    if (i2c_fd < 0) {
-        printf("[WARNING] Failed to open I2C bus.\n");
-        printf("          -> Running in Network-Only (Simulation) mode.\n");
-    } else if (ioctl(i2c_fd, I2C_SLAVE, STYRKOMM_ADDR) < 0) {
-        printf("[WARNING] Failed to configure I2C address 0x12.\n");
-        printf("          -> Running in Network-Only (Simulation) mode.\n");
-    } else {
-        // THE PHYSICAL PROBE: Try to write 0 bytes
-        if (write(i2c_fd, NULL, 0) < 0) {
-            printf("[WARNING] Microcontroller not found at 0x12!\n");
-            printf("          Check your physical SDA, SCL, and GND connections.\n");
-            printf("          -> Running in Network-Only (Simulation) mode.\n");
+    // SETUP I2C - STYRKOMM (0x12)
+    i2c_styr_fd = open(I2C_DEVICE, O_RDWR);
+    if (i2c_styr_fd >= 0) {
+        ioctl(i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR);
+        if (write(i2c_styr_fd, NULL, 0) < 0) {
+            printf("[WARNING] Motor Controller (0x12) missing. Running in Sim Mode.\n");
         } else {
-            printf("Successfully connected AND verified physical I2C address 0x12\n");
+            printf("Connected to Motor Controller (0x12)\n");
+        }
+    }
+
+    // SETUP I2C - SENSOR (0x10)
+    i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
+    if (i2c_sens_fd >= 0) {
+        ioctl(i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
+        if (write(i2c_sens_fd, NULL, 0) < 0) {
+            printf("[WARNING] Sensor Board (0x10) missing. Will send zeros.\n");
+        } else {
+            printf("Connected to Sensor Board (0x10)\n");
         }
     }
 
@@ -285,7 +293,24 @@ int main() {
 
     // NON-BLOCKING MAIN LOOP
     while (1) {
-        // 1. CHECK FOR NETWORK PACKETS (INSTANTLY, NO WAITING)
+        // -------------------------------------------------------------
+        // 1. READ FROM SENSOR (0x10)
+        // -------------------------------------------------------------
+        unsigned char sensor_packet[PACKET_SIZE];
+        if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) {
+            // Note: Assuming standard High-Byte first (Big Endian). 
+            // If values are weird, swap [1] with [2] and [3] with [4].
+            int16_t val1 = (int16_t)((sensor_packet[1] << 8) | sensor_packet[2]);
+            int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
+            
+            line_var = (uint8_t)((val1 + val2) / 2);
+            gyro1 = sensor_packet[6];
+            gyro2 = sensor_packet[7];
+        }
+
+        // -------------------------------------------------------------
+        // 2. CHECK FOR NETWORK PACKETS (INSTANTLY)
+        // -------------------------------------------------------------
         int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
         
         if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
@@ -299,20 +324,26 @@ int main() {
                     start_autonomous_sequence(state);
                 }
             } else if (state == 3 || state == 4) {
-                // MANUAL OVERRIDE: Kill auto route if manual command arrives
+                // MANUAL OVERRIDE
                 if (current_phase != PHASE_IDLE) {
                     printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
                     current_phase = PHASE_IDLE;
                 }
                 
-                // Blast the manual command to I2C and log it continuously
-                write(i2c_fd, buffer, PACKET_SIZE);
+                // Inject Sensor Data before forwarding!
+                buffer[4] = line_var;
+                buffer[5] = gyro1;
+                buffer[6] = gyro2;
+
+                write(i2c_styr_fd, buffer, PACKET_SIZE);
                 log_verification(buffer, action);
                 printf("-> Manual Command Forwarded: '%c'\n", action);
             }
         }
 
-        // 2. AUTONOMOUS STATE MACHINE (RUNS CONTINUOUSLY)
+        // -------------------------------------------------------------
+        // 3. AUTONOMOUS STATE MACHINE 
+        // -------------------------------------------------------------
         if (current_phase != PHASE_IDLE) {
             
             loop_counter++;
@@ -322,7 +353,7 @@ int main() {
                 current_action_index++;
                 aktivt_beslut_fn(current_action_index);
                 
-                log_next_action = true; // Flag to print to console just once
+                log_next_action = true; 
 
                 if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
                     current_phase = PHASE_PICKUP;
@@ -340,35 +371,36 @@ int main() {
                     current_phase = PHASE_IDLE;
                     printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
                     
-                    // Send a final stop command
-                    unsigned char stop_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 's', 0x00, 0x00, 0x00, 0xFF};
-                    write(i2c_fd, stop_packet, PACKET_SIZE);
+                    // Send a final stop command with active sensor data
+                    unsigned char stop_packet[PACKET_SIZE] = {
+                        0x05, current_auto_state, 0x00, 's', 
+                        line_var, gyro1, gyro2, 0xFF
+                    };
+                    write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                     log_verification(stop_packet, 's');
                 }
 
-                // Reset counter for the next action cycle
                 loop_counter = 0;
             }
 
-            // B. BLAST THE CURRENT ACTION CONTINUOUSLY (If still driving)
+            // BLAST THE CURRENT ACTION CONTINUOUSLY
             if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
-                unsigned char auto_packet[PACKET_SIZE] = {0x05, current_auto_state, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF};
+                
+                unsigned char auto_packet[PACKET_SIZE] = {
+                    0x05, 
+                    current_auto_state, 
+                    (current_phase == PHASE_PICKUP) ? 0x01 : 0x00, // Arm or Wheel
+                    aktivt_beslut, 
+                    line_var,  // Inject calculated line sensor
+                    gyro1,     // Inject direct gyro 1
+                    gyro2,     // Inject direct gyro 2
+                    0xFF
+                };
 
-                // Set target to Arm if picking up, otherwise Wheel
-                if (current_phase == PHASE_PICKUP) {
-                    auto_packet[2] = 0x01; 
-                }
-
-                // Inject our active decision
-                auto_packet[3] = aktivt_beslut;
-
-                // 1. SEND TO MICROCONTROLLER EVERY LOOP ITERATION
-                write(i2c_fd, auto_packet, PACKET_SIZE);
-
-                // 2. ALWAYS LOG EVERY TRANSMISSION
+                // SEND TO MICROCONTROLLER EVERY LOOP ITERATION
+                write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 log_verification(auto_packet, auto_packet[3]);
 
-                // 3. PRINT TO CONSOLE ONLY WHEN ACTION CHANGES
                 if (log_next_action) {
                     printf("Action updated to: '%c'\n", auto_packet[3]);
                     log_next_action = false;
@@ -376,11 +408,14 @@ int main() {
             }
         }
 
-        // 3. TINY DELAY (Crucial to prevent Pi CPU from hitting 100%)
+        // -------------------------------------------------------------
+        // 4. TINY DELAY (2000 microseconds = 2 milliseconds / 500Hz)
+        // -------------------------------------------------------------
         usleep(2000); 
     }
 
     close(sockfd);
-    if (i2c_fd >= 0) close(i2c_fd);
+    if (i2c_styr_fd >= 0) close(i2c_styr_fd);
+    if (i2c_sens_fd >= 0) close(i2c_sens_fd);
     return 0;
 }
