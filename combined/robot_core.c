@@ -318,12 +318,12 @@ int main() {
             unsigned char target = buffer[2];
             char action = (char)buffer[3];
 
-            if (state == 1 || state == 2) {
+            if (state == 0x00 || state == 0x01) {
                 // Start Auto Mode if 'f' is pressed
                 if (action == 'f' && current_phase == PHASE_IDLE) {
                     start_autonomous_sequence(state);
                 }
-            } else if (state == 3 || state == 4) {
+            } else if (state == 0x02 || state == 0x03) {
                 // MANUAL OVERRIDE
                 if (current_phase != PHASE_IDLE) {
                     printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
