@@ -57,10 +57,10 @@ class MainWindow(QMainWindow):
         # 1. State Selector
         self.state_combo = QComboBox()
         self.state_combo.setStyleSheet("background-color: white; color: black; padding: 5px; font-size: 14px;")
-        self.state_combo.addItem("1: (Auto, Auto)", 1)
-        self.state_combo.addItem("2: (Auto, Manual)", 2)
-        self.state_combo.addItem("3: (Manual, Auto)", 3)
-        self.state_combo.addItem("4: (Manual, Manual)", 4)
+        self.state_combo.addItem("1: (Auto, Auto)", 0)
+        self.state_combo.addItem("2: (Auto, Manual)", 1)
+        self.state_combo.addItem("3: (Manual, Auto)", 2)
+        self.state_combo.addItem("4: (Manual, Manual)", 3)
         self.state_combo.setCurrentIndex(3) # Default to 4
         # Return focus to main window after clicking so keyboard works
         self.state_combo.currentIndexChanged.connect(lambda: self.setFocus()) 

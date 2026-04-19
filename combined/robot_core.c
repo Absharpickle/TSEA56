@@ -303,7 +303,8 @@ int main() {
             int16_t val1 = (int16_t)((sensor_packet[1] << 8) | sensor_packet[2]);
             int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
             
-            line_var = (uint8_t)((val1 + val2) / 2);
+            // line_var = (uint8_t)((val1 + val2) / 2);
+            line_var = 0x00 // test
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
         }
