@@ -244,6 +244,7 @@ int main() {
 
     // Globals to hold the incoming sensor values
     uint8_t line_var = 0;
+    uint8_t angle = 0;
     uint8_t gyro1 = 0;
     uint8_t gyro2 = 0;
 
@@ -300,11 +301,12 @@ int main() {
         if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) {
             // Note: Assuming standard High-Byte first (Big Endian). 
             // If values are weird, swap [1] with [2] and [3] with [4].
-            int16_t val1 = (int16_t)((sensor_packet[1] << 8) | sensor_packet[2]);
+            int16_t val1 = (int16_t)((sensor_packet[2] << 8) | sensor_packet[1]); //Fabian nils och adam bytte till little endian 1 till 2
             int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
             
-            // line_var = (uint8_t)((val1 + val2) / 2);
-            line_var = 0x00; // test
+            //line_var = (uint8_t)((val1 + val2) / 2);
+            line_var = sensor_packet[1];
+            angle = sensor_packet[2];
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
         }
@@ -333,7 +335,7 @@ int main() {
                 
                 // Inject Sensor Data before forwarding!
                 buffer[4] = line_var;
-                buffer[5] = gyro1;
+                buffer[5] = angle;
                 buffer[6] = gyro2;
 
                 write(i2c_styr_fd, buffer, PACKET_SIZE);
