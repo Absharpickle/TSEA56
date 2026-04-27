@@ -274,6 +274,11 @@ int main() {
     uint8_t angle = 0;
     uint8_t gyro1 = 0;
     uint8_t gyro2 = 0;
+    
+    uint8_t flags = 0;
+    uint8_t flags_korsning = 0;
+    uint8_t flags_ny_korsning = 0;
+    uint8_t flags_obstacle = 0;
 
     init_karta(); // Initierar kartan
 
@@ -334,6 +339,10 @@ int main() {
             angle = sensor_packet[2];
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
+
+            flags_korsning = (flags && 12);
+            flags_ny_korsning = (flags && 32);
+            flags_obstacle = (flags && 16);
         }
 
         // -------------------------------------------------------------
@@ -374,23 +383,68 @@ int main() {
         // 3. AUTONOMOUS STATE MACHINE 
         // -------------------------------------------------------------
         if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
-            
-            loop_counter++;
 
-            // 2500 loops * 2000 microseconds = 5,000,000us (Exactly 5 Seconds)
-            if (loop_counter == 2500*2000) {
+            if (flags_ny_korsning) {
                 current_action_index++;
                 aktivt_beslut_fn(current_action_index);
-                
-                log_next_action = true; 
 
-                if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
+                if (flags_korsning == 2) { // Korsning
+
+                    if (aktivt_beslut == 'l' || aktivt_beslut == 'h' || aktivt_beslut == 'r' || aktivt_beslut == 'b') {
+                        // 1. Skicka stopp_packet till styr
+                        unsigned char stop_packet[PACKET_SIZE] = {
+                            0x05, current_auto_state, 0x00, 's', 
+                            line_var, gyro1, gyro2, 0xFF
+                        };
+                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
+                        log_verification(stop_packet, 's');
+                        
+                        // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om stopp är klart kan vi fortsätta.
+
+                        // 2. Påbörja rotation
+                        unsigned char turn_packet[PACKET_SIZE] = {
+                            0x05, current_auto_state, 0x00, aktivt_beslut, 
+                            line_var, gyro1, gyro2, 0xFF
+                        };
+                        write(i2c_styr_fd, turn_packet, PACKET_SIZE);
+                        log_verification(turn_packet, aktivt_beslut);
+                        
+                        // 3. Vänta tills rotationen är klar. 
+                        // OBS: usleep blockerar hela main-loopen. I ett skarpt system 
+                        // är det bättre att vänta in en specifik vinkel från gyrot!
+                        // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om rotation är klart kan vi fortsätta.
+
+                    }
+                }
+                else if ((flags_korsning == 1) && (aktivt_beslut == 'X')) {
+                    // Plocka upp vara (FEATURE_PICKUP)
+                    unsigned char stop_packet[PACKET_SIZE] = {
+                        0x05, current_auto_state, 0x00, 's', 
+                        line_var, gyro1, gyro2, 0xFF
+                    };
+                    write(i2c_styr_fd, stop_packet, PACKET_SIZE);
+                    log_verification(stop_packet, 's');
+
                     current_phase = PHASE_PICKUP;
                     current_action_index = 0;
                     aktivt_beslut_fn(current_action_index);
+                    
+                    // Säg till styrmodulen att använda armen ('v' som action)
+                    unsigned char arm_packet[PACKET_SIZE] = {
+                        0x05, current_auto_state, 0x01, 'v', 
+                        line_var, gyro1, gyro2, 0xFF
+                    };
+                    write(i2c_styr_fd, arm_packet, PACKET_SIZE);
+                    
+                    // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om armen är klar kan vi fortsätta.
+
                     printf("\n-> PHASE CHANGE: Picking up item...\n");
-                } 
-                else if (current_phase == PHASE_PICKUP) {
+                }
+                
+                log_next_action = true; 
+
+                // Dessa fasbyten sker *efter* att plocket är utfört
+                if (current_phase == PHASE_PICKUP) {
                     current_phase = PHASE_TO_HOME;
                     current_action_index = 0;
                     aktivt_beslut_fn(current_action_index);
@@ -400,7 +454,7 @@ int main() {
                     current_phase = PHASE_IDLE;
                     printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
                     
-                    // Send a final stop command with active sensor data
+                    // Send a final stop command
                     unsigned char stop_packet[PACKET_SIZE] = {
                         0x05, current_auto_state, 0x00, 's', 
                         line_var, gyro1, gyro2, 0xFF
@@ -410,6 +464,49 @@ int main() {
                 }
 
                 loop_counter = 0;
+            }
+
+            if (flags_obstacle) {
+                printf("\n[!] HINDER UPPTÄCKT! Planerar om rutt...\n");
+
+                // 1. Skicka stopp_packet
+                unsigned char stop_packet[PACKET_SIZE] = {
+                    0x05, current_auto_state, 0x00, 's', 
+                    line_var, gyro1, gyro2, 0xFF
+                };
+                write(i2c_styr_fd, stop_packet, PACKET_SIZE);
+
+                // 2. Ta reda på aktuell nod och nästa nod
+                int u = -1, v = -1;
+                if (current_phase == PHASE_TO_ITEM) {
+                    u = rutt_till_vara[current_action_index];
+                    v = rutt_till_vara[current_action_index + 1];
+                } else if (current_phase == PHASE_TO_HOME) {
+                    u = rutt_hem[current_action_index];
+                    v = rutt_hem[current_action_index + 1];
+                }
+
+                if (u != -1 && v != -1 && v != STOP) {
+                    // 3. Stäng av vägen i kartan
+                    vag[u][v] = 0;
+                    vag[v][u] = 0;
+
+                    // 4. Vänd om (bakåt)
+                    unsigned char turn_back[PACKET_SIZE] = {
+                        0x05, current_auto_state, 0x00, 'b', 
+                        line_var, gyro1, gyro2, 0xFF
+                    };
+                    write(i2c_styr_fd, turn_back, PACKET_SIZE);
+                    usleep(1500000); // Vänta medan roboten roterar 180 grader
+
+                    // 5. Beräkna ny riktning in och planera ny rutt från nod U
+                    char dir_mot_v = nodriktningsmatris[u][v];
+                    char dir_efter_vandning = get_motsatt_dir(dir_mot_v);
+                    
+                    planera_hela_resan(u, dir_efter_vandning);
+                    current_action_index = 0;
+                    aktivt_beslut_fn(current_action_index);
+                }
             }
 
             // BLAST THE CURRENT ACTION CONTINUOUSLY
