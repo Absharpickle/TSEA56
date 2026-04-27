@@ -14,30 +14,32 @@
 #include <stdint.h> // Required for int16_t and uint8_t
 
 // --- ALGORITHM DEFINITIONS ---
-#define NODES 26
-#define START 25 
-#define NONE -1
-#define STOP -1
+#define NODES 26 // 5x5 samt en start/slutnod
+#define START 25 // Start/slut på nod 25
+#define NONE -1 // Betyder att det inte finns en föregående nod
+#define STOP -1 // Stoppvillkor för ruttarray
 
 // --- TELEMETRY DEFINITIONS ---
-#define UDP_PORT 5001
-#define BUFFER_SIZE 1024
-#define I2C_DEVICE "/dev/i2c-1"
+#define UDP_PORT 5001 // Porten som används för kommunikation med persondatorn
+#define BUFFER_SIZE 1024 // Storleken på bufferten
+#define I2C_DEVICE "/dev/i2c-1" // Filnamn för i2c-bussen
 #define STYRKOMM_ADDR 0x12
-#define SENSOR_ADDR 0x10    // NEW: Sensor I2C Address
-#define PACKET_SIZE 8
-#define VERIFY_LOG_FILE "verifikation_keys.txt"
+#define SENSOR_ADDR 0x10
+#define PACKET_SIZE 8 // Paketstorleken för kommunikationen inom systemet (i2c)
+#define VERIFY_LOG_FILE "verifikation_keys.txt" // Loggfil
 
 // --- ALGORITHM GLOBALS ---
-char nodriktningsmatris[NODES][NODES];
-int  vag[NODES][NODES];
-int  rutt_till_vara[NODES];
-int  rutt_hem[NODES];
-char beslut_till_vara[NODES];
-char beslut_hem[NODES];
-int  vara_u, vara_v; 
+char nodriktningsmatris[NODES][NODES]; // Väderstreck för vägarna (ex från (5) till (6) är östlig riktning 'e')
+int  vag[NODES][NODES]; // Huruvida vägen är aktiv/finns (ex väg mellan (0) och (20) finns ej och är 0)
+int  rutt_till_vara[NODES]; // Array med vägen (nodnummer) till varan
+int  rutt_hem[NODES]; // Array med vägen (nodnummer) från varan till slut
+char beslut_till_vara[NODES]; // Array med tecken (action) vid varje korsning
+char beslut_hem[NODES]; // Array med tecken (ACTION) vid varje korning hem
+int  vara_u, vara_v; // u och v är noder och varan ligger mellan dem och bestäms av input från persondatorn
 
 // --- STATE MACHINE GLOBALS ---
+// Definierar datatypen 'autophase' som bara kan ta fyra värden
+// Används till att bestämma vad roboten håller på med just nu
 typedef enum {
     PHASE_IDLE = 0,
     PHASE_TO_ITEM,
@@ -45,35 +47,39 @@ typedef enum {
     PHASE_TO_HOME
 } AutoPhase;
 
-AutoPhase current_phase = PHASE_IDLE;
-int current_action_index = 0;
-unsigned char current_auto_state = 1;
-bool log_next_action = false;
+AutoPhase current_phase = PHASE_IDLE; // I början står roboten still
+int current_action_index = 0; // Index för att hämta aktuellt belut. Räknas upp när vi når korsning.
+unsigned char current_auto_state = 1; // Bestämmer STATE (auto, auto), (manuell, auto) osv
+bool log_next_action = false; // Har med logg att göra
 
 // --- LOOP TIMING GLOBALS ---
-char aktivt_beslut = 's'; // Default to stop
-int  loop_counter = 0;
+char aktivt_beslut = 's'; // Börjar med 's' (stå stilla)
+int  loop_counter = 0; // Räknar upp loopen för att se när nästa beslut ska skickas (just nu bara test)
 
 // =================================================================
 // 1. KARTA, HJÄLPFUNKTIONER & RUTTPLANERING
 // =================================================================
 void init_karta() {
-    memset(vag, 0, sizeof(vag));
-    memset(nodriktningsmatris, ' ', sizeof(nodriktningsmatris));
+    memset(vag, 0, sizeof(vag)); // Sätter alla vägar inaktiva
+    memset(nodriktningsmatris, ' ', sizeof(nodriktningsmatris)); // Sätter alla väderstreck till blankkaraktärer
+
+    // Loopar igenom alla noder
     for (int i = 0; i < 25; i++) {
-        int rad = i / 5;
-        int kol = i % 5;
-        if (kol < 4) { vag[i][i+1] = 1; nodriktningsmatris[i][i+1] = 'e'; } 
-        if (kol > 0) { vag[i][i-1] = 1; nodriktningsmatris[i][i-1] = 'w'; } 
-        if (rad < 4) { vag[i][i+5] = 1; nodriktningsmatris[i][i+5] = 's'; } 
-        if (rad > 0) { vag[i][i-5] = 1; nodriktningsmatris[i][i-5] = 'n'; } 
+        int rad = i / 5; // Räknar ut vilken rad noden är på genom att avrunda aktuell nod / antal kolonner nedåt
+        int kol = i % 5; // Räkanr ut vilken kolonn noden är på genom att ta resten av aktuell nod / antal rader 
+        if (kol < 4) { vag[i][i+1] = 1; nodriktningsmatris[i][i+1] = 'e'; } // Noder på kolonn 0-3 har alltid en nod österut 'e' som är nästa nodnummer
+        if (kol > 0) { vag[i][i-1] = 1; nodriktningsmatris[i][i-1] = 'w'; } // Noder på kolonn 1-4 har alltid en nod västerut 'w' som är föregående nodnummer
+        if (rad < 4) { vag[i][i+5] = 1; nodriktningsmatris[i][i+5] = 's'; } // Noder på rad 0-3 har alltid en nod söderut 's' som är 5 nodnummer framåt
+        if (rad > 0) { vag[i][i-5] = 1; nodriktningsmatris[i][i-5] = 'n'; } // Noder på rad 1-4 har alltid en nod norrut 'n' som är 5 nodnummer bakåt
     }
-    vag[START][0] = 1; 
-    vag[0][START] = 1;
-    nodriktningsmatris[START][0] = 's';
-    nodriktningsmatris[0][START] = 'n';
+
+    vag[START][0] = 1; // Aktivera vägen mellan startnod och nod 0 
+    vag[0][START] = 1; // Aktivera vägen mellan nod 0 och startnod (symmetrisk matris)
+    nodriktningsmatris[START][0] = 's'; // Förutsätter att start -> 0 är söderut
+    nodriktningsmatris[0][START] = 'n'; // Förutsäter att 0 -> start är norrut
 }
 
+// Funktion som avgör svängriktning genom att jämföra väderstreck
 char get_turn(char nu, char nasta) {
     if (nu == nasta) return 'f';
     if (nu == 'n' && nasta == 'e') return 'r';
@@ -87,6 +93,7 @@ char get_turn(char nu, char nasta) {
     return 'b';
 }
 
+// Funktion som anger motsatt riktning
 char get_motsatt_dir(char nu) {
     if (nu == 's') return 'n';
     if (nu == 'n') return 's';
@@ -95,22 +102,28 @@ char get_motsatt_dir(char nu) {
     return nu; 
 }
 
+// Funktion som tar in en rutt och robotens startriktning och uppdaterar beslutsarrayen
 void bygg_beslut(int rutt[], char start_dir, char beslut[]) {
-    char dir = start_dir;
-    int i = 0;
+    char dir = start_dir; // Hjälpvariabel
+    int i = 0; // Index
+
+    // Loopa till dess att det inte finns något mer i rutten
     while (rutt[i + 1] != STOP) {
-        char nasta_dir = nodriktningsmatris[rutt[i]][rutt[i + 1]];
-        beslut[i] = get_turn(dir, nasta_dir);
+        char nasta_dir = nodriktningsmatris[rutt[i]][rutt[i + 1]]; // Kollar vilken väderstreck noden har jämfört med nästa nod i rutten
+        beslut[i] = get_turn(dir, nasta_dir); // Jämför väderstreck med nästa väderstreck för att beräkna riktning och lagra i beslutet
         dir = nasta_dir;
         i++;
     }
-    beslut[i] = 'X'; 
-    beslut[i+1] = '\0';
+    beslut[i] = 'X'; // Sista beslutet är 'X' som betyder hämta/lämna varan
+    beslut[i+1] = '\0'; // Avslutar array
 }
 
+
+// Funktion som beräknar rutten genom BFS + kostnad för svängar
 int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
-    int kostnad[NODES], foregaende[NODES];
-    char riktning_in[NODES];
+    int kostnad[NODES]; // Varje nod har en kostnad för att ta sig dit
+    int foregaende[NODES]; // Varje nod har en föregående för att hålla koll på snabbaste vägen
+    char riktning_in[NODES]; // 
     bool besokt[NODES] = {false};
 
     for (int i = 0; i < NODES; i++) {
