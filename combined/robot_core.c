@@ -326,10 +326,10 @@ int main() {
         // -------------------------------------------------------------
         unsigned char sensor_packet[PACKET_SIZE];
         if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { // Om filen är öppen och PACKET_SIZE == 8... (read läser även in sensorpaketet)
-            int16_t val1 = (int16_t)((sensor_packet[2] << 8) | sensor_packet[1]); //Fabian nils och adam bytte till little endian 1 till 2
-            int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
+           // int16_t val1 = (int16_t)((sensor_packet[2] << 8) | sensor_packet[1]); //Fabian nils och adam bytte till little endian 1 till 2
+           // int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
             
-            //line_var = (uint8_t)((val1 + val2) / 2);
+            flags = sensor_packet[0];
             line_var = sensor_packet[1];
             angle = sensor_packet[2];
             gyro1 = sensor_packet[6];
