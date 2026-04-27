@@ -420,12 +420,6 @@ int main(void) {
             pkt_write_i16(3, dev1);
             tx_buf[5] = dist;
             pkt_write_i16(6, omega);
-			
-			tx_buf[0] = 1;
-            pkt_write_i16(2, 3);
-            pkt_write_i16(4, 5);
-            tx_buf[5] = 6;
-            pkt_write_i16(7, 8);
             sei();
 
             // Debug-uppdatering
