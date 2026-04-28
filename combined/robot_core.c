@@ -56,6 +56,7 @@ bool log_next_action = false; // Har med logg att göra
 bool is_rotating = false;
 bool is_picking_up = false;
 time_t action_timer_start = 0; // Timer för att ersätta styrmodulens svarsignal
+int blasting_counter = 0; // Räknare för att lugna ned skickandet till motorerna
 
 // --- TELEMETRY GLOBALS FÖR GUI ---
 bool gui_known = false; // Har GUI:t hört av sig än?
@@ -473,7 +474,7 @@ int main() {
                                 line_var, gyro1, gyro2, 0xFF
                             };
                             write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                            log_verification(stop_packet, 's');
+                            // Loggas när decision ändras
                             
                             // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om stopp är klart kan vi fortsätta.
 
@@ -497,7 +498,6 @@ int main() {
                             line_var, gyro1, gyro2, 0xFF
                         };
                         write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                        log_verification(stop_packet, 's');
 
                         current_phase = PHASE_PICKUP;
                         aktivt_beslut = 'v';
@@ -530,7 +530,6 @@ int main() {
                             line_var, gyro1, gyro2, 0xFF
                         };
                         write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                        log_verification(stop_packet, 's');
                     }
 
                     loop_counter = 0;
@@ -539,25 +538,30 @@ int main() {
 
             // BLAST THE CURRENT ACTION CONTINUOUSLY
             if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
-                
-                unsigned char auto_packet[PACKET_SIZE] = {
-                    0x05, 
-                    current_auto_state, 
-                    (current_phase == PHASE_PICKUP) ? 0x01 : 0x00, // Arm or Wheel
-                    aktivt_beslut, 
-                    line_var,  // Inject calculated line sensor
-                    gyro1,     // Inject direct gyro 1
-                    gyro2,     // Inject direct gyro 2
-                    0xFF
-                };
+                blasting_counter++;
+                if (blasting_counter >= 50) { // Skickar var 100:e millisekund (10 Hz)
+                    
+                    unsigned char auto_packet[PACKET_SIZE] = {
+                        0x05, 
+                        current_auto_state, 
+                        (current_phase == PHASE_PICKUP) ? 0x01 : 0x00, // Arm or Wheel
+                        aktivt_beslut, 
+                        line_var,  // Inject calculated line sensor
+                        gyro1,     // Inject direct gyro 1
+                        gyro2,     // Inject direct gyro 2
+                        0xFF
+                    };
 
-                // SEND TO MICROCONTROLLER EVERY LOOP ITERATION
-                write(i2c_styr_fd, auto_packet, PACKET_SIZE);
-                log_verification(auto_packet, auto_packet[3]);
-
-                if (log_next_action) {
-                    printf("Action updated to: '%c'\n", auto_packet[3]);
-                    log_next_action = false;
+                    // SEND TO MICROCONTROLLER EVERY 100ms
+                    write(i2c_styr_fd, auto_packet, PACKET_SIZE);
+                    
+                    if (log_next_action) {
+                        log_verification(auto_packet, auto_packet[3]);
+                        printf("Action updated to: '%c'\n", auto_packet[3]);
+                        log_next_action = false;
+                    }
+                    
+                    blasting_counter = 0;
                 }
             }
         }
