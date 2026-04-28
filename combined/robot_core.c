@@ -408,7 +408,7 @@ int main() {
                 // Start Auto Mode if 'f' is pressed
                 if (action == 'f' && current_phase == PHASE_IDLE) {
                     start_autonomous_sequence(state);
-                } else if (current_phase != PHASE_IDLE) {
+                } else {
                     // Inject Sensor Data before forwarding!
                     buffer[4] = line_var;
                     buffer[5] = gyro1;
