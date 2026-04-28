@@ -4,7 +4,7 @@ import numpy as np
 import socket
 import struct
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QPushButton, QComboBox)
+                             QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QPixmap
 import os
@@ -24,6 +24,45 @@ class VideoThread(QThread):
             ret, frame = cap.read()
             if ret:
                 self.change_pixmap_signal.emit(frame)
+
+# --- NEW: Telemetry Listener Thread ---
+class TelemetryThread(QThread):
+    telemetry_signal = pyqtSignal(dict)
+
+    def __init__(self, sock):
+        super().__init__()
+        self.sock = sock
+        self.running = True
+
+    def run(self):
+        # Set a small timeout so the thread can gracefully exit if needed
+        self.sock.settimeout(1.0)
+        
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(1024)
+                # Check if it's our 8-byte telemetry packet (Starts with 0x06, Ends with 0xFF)
+                if len(data) == 8 and data[0] == 0x06 and data[7] == 0xFF:
+                    # Unpack 8 unsigned bytes
+                    unpacked = struct.unpack('8B', data)
+                    
+                    # Create a dictionary of the received data
+                    telemetry_data = {
+                        'phase': unpacked[1],
+                        'action': chr(unpacked[2]), # Convert ASCII code back to character
+                        'line_var': unpacked[3],
+                        'gyro1': unpacked[4],
+                        'gyro2': unpacked[5],
+                        'flags': unpacked[6]
+                    }
+                    self.telemetry_signal.emit(telemetry_data)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                pass # Ignore other socket errors during normal operation
+
+    def stop(self):
+        self.running = False
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -46,9 +85,11 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # --- TELEMETRY SETUP ---
-        self.pi_ip = "10.42.0.1"
+        self.pi_ip = "10.42.0.1" # Change to your Pi's IP if needed
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # We must bind our socket to listen for returning packets on whatever port the OS assigns
+        self.control_sock.bind(("0.0.0.0", 0)) 
 
         # --- CONTROL PANEL ---
         self.control_layout = QHBoxLayout()
@@ -76,7 +117,7 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(QLabel("Target:"))
         self.control_layout.addWidget(self.target_combo)
 
-       # Instructions Label
+        # Instructions Label
         self.inst_label = QLabel(
             "HOTKEYS -> STATE: [1-4] | TARGET: [W]heel, [A]rm\n"
             "WHEEL: Arrows (Move), 'S' (Stop), 'E' (CW), 'O' (CCW)  |  ARM: 'V' (Left), 'H' (Right)"
@@ -84,12 +125,46 @@ class MainWindow(QMainWindow):
         self.inst_label.setStyleSheet("color: #bdc3c7; font-size: 13px; font-weight: bold;")
         self.layout.addWidget(self.inst_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # Start Video Thread
-        self.thread = VideoThread()
-        self.thread.change_pixmap_signal.connect(self.update_image)
-        self.thread.start()
+        # --- NEW: LIVE TELEMETRY DASHBOARD ---
+        self.dashboard_frame = QFrame()
+        self.dashboard_frame.setStyleSheet("QFrame { background-color: #34495e; border-radius: 5px; margin-top: 10px; }")
+        self.dashboard_layout = QHBoxLayout(self.dashboard_frame)
+        
+        self.lbl_phase = QLabel("Phase: IDLE")
+        self.lbl_action = QLabel("Last Action: -")
+        self.lbl_line = QLabel("Line: 0")
+        self.lbl_gyro = QLabel("Gyro: (0, 0)")
+        self.lbl_flags = QLabel("Flags: 0")
+        
+        for lbl in [self.lbl_phase, self.lbl_action, self.lbl_line, self.lbl_gyro, self.lbl_flags]:
+            lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; padding: 5px;")
+            self.dashboard_layout.addWidget(lbl)
+            
+        self.layout.addWidget(self.dashboard_frame)
 
-# --- KEYBOARD LISTENER ---
+        # Start Video Thread
+        self.video_thread = VideoThread()
+        self.video_thread.change_pixmap_signal.connect(self.update_image)
+        self.video_thread.start()
+
+        # Start Telemetry Thread
+        self.telemetry_thread = TelemetryThread(self.control_sock)
+        self.telemetry_thread.telemetry_signal.connect(self.update_telemetry_dashboard)
+        self.telemetry_thread.start()
+
+        # Phase names mapping
+        self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME"}
+
+    # --- NEW: UPDATE TELEMETRY UI METHOD ---
+    def update_telemetry_dashboard(self, data):
+        phase_str = self.phase_names.get(data['phase'], "UNKNOWN")
+        self.lbl_phase.setText(f"Phase: {phase_str}")
+        self.lbl_action.setText(f"Action: '{data['action']}'")
+        self.lbl_line.setText(f"Line: {data['line_var']}")
+        self.lbl_gyro.setText(f"Gyro: ({data['gyro1']}, {data['gyro2']})")
+        self.lbl_flags.setText(f"Flags: {data['flags']}")
+
+    # --- KEYBOARD LISTENER ---
     def keyPressEvent(self, event):
         key = event.key()
         action_char = None
@@ -134,6 +209,7 @@ class MainWindow(QMainWindow):
             elif key == Qt.Key.Key_S: action_char = 's'
             elif key == Qt.Key.Key_E: action_char = 'e'
             elif key == Qt.Key.Key_O: action_char = 'o'
+            elif key == Qt.Key.Key_U: action_char = 'u' # Lagt till U-sväng
             
         elif target == "arm":
             if key == Qt.Key.Key_V: action_char = 'v'
@@ -167,7 +243,7 @@ class MainWindow(QMainWindow):
         
         try:
             self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
-            print(f"[{current_target.upper()}] Sent '{action_char}' (Hex: {packet.hex().upper()})")
+            # print(f"[{current_target.upper()}] Sent '{action_char}' (Hex: {packet.hex().upper()})")
         except Exception as e:
             print(f"Error sending packet: {e}")
 
@@ -182,6 +258,12 @@ class MainWindow(QMainWindow):
         bytes_per_line = ch * w
         convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
         return QPixmap.fromImage(convert_to_Qt_format)
+
+    def closeEvent(self, event):
+        # Cleanly stop the thread when closing the application
+        self.telemetry_thread.stop()
+        self.telemetry_thread.wait()
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

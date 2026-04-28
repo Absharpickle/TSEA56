@@ -55,6 +55,11 @@ bool log_next_action = false; // Har med logg att göra
 // Nya variabler för den icke-blockerande "blasting"-logiken
 bool is_rotating = false;
 bool is_picking_up = false;
+time_t action_timer_start = 0; // Timer för att ersätta styrmodulens svarsignal
+
+// --- TELEMETRY GLOBALS FÖR GUI ---
+bool gui_known = false; // Har GUI:t hört av sig än?
+int telemetry_counter = 0; // Räknare för att inte spamma nätverket
 
 // --- LOOP TIMING GLOBALS ---
 char aktivt_beslut = 's'; // Börjar med 's' (stå stilla)
@@ -260,6 +265,7 @@ void start_autonomous_sequence(unsigned char state) {
     
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
         is_rotating = true;
+        action_timer_start = time(NULL); // Starta klockan
     } else {
         aktivt_beslut = 'f';
     }
@@ -355,26 +361,16 @@ int main() {
         }
 
         // -------------------------------------------------------------
-        // 1.5. LÄS SVARSIGNAL FRÅN STYRMODUL (0x12)
-        // -------------------------------------------------------------
-        unsigned char styr_rx_buffer[5];
-        bool styrmodul_klar = false;
-
-        // Vi läser exakt 5 bytes från styrmodulen
-        if (i2c_styr_fd >= 0 && read(i2c_styr_fd, styr_rx_buffer, 5) == 5) {
-            // Kolla byte 5 (index 4) om flaggan är 1
-            if (styr_rx_buffer[4] == 1) {
-                styrmodul_klar = true;
-            }
-        }
-
-        // -------------------------------------------------------------
         // 2. CHECK FOR NETWORK PACKETS (INSTANTLY)
         // -------------------------------------------------------------
 
         // Läs in från persondatorn
         int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
         
+        if (n > 0) {
+            gui_known = true; // Vi har fått ett paket, nu vet vi GUI:ts IP och port!
+        }
+
         if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
             unsigned char state = buffer[1];
             unsigned char target = buffer[2];
@@ -420,15 +416,15 @@ int main() {
         if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
 
             if (is_rotating) {
-                // Använd flaggan vi läste in från 5-byte-paketet
-                if (styrmodul_klar) {
+                // Vi använder en timer för att simulera en "sleep" utan att blockera "blasting"
+                if (time(NULL) - action_timer_start >= 2) { // 2 sekunder för rotation
                     is_rotating = false;
                     aktivt_beslut = 'f';
                     log_next_action = true;
                 }
             } else if (is_picking_up) {
-                // Använd samma flagga, men här vet vi att den gäller armen
-                if (styrmodul_klar) {
+                // Vi använder samma timer-koncept för armen
+                if (time(NULL) - action_timer_start >= 3) { // 3 sekunder för plock
                     // Dessa fasbyten sker *efter* att plocket är utfört
                     is_picking_up = false;
                     current_phase = PHASE_TO_HOME;
@@ -437,6 +433,7 @@ int main() {
                     
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
                         is_rotating = true;
+                        action_timer_start = time(NULL); // Starta klockan igen för rotation
                     } else {
                         aktivt_beslut = 'f';
                     }
@@ -464,6 +461,7 @@ int main() {
 
                             // 2. Påbörja rotation
                             is_rotating = true;
+                            action_timer_start = time(NULL); // Starta klockan
                             
                             // 3. Vänta tills rotationen är klar. 
                             // OBS: usleep blockerar hela main-loopen. I ett skarpt system 
@@ -486,6 +484,7 @@ int main() {
                         current_phase = PHASE_PICKUP;
                         aktivt_beslut = 'v';
                         is_picking_up = true;
+                        action_timer_start = time(NULL); // Starta klockan
                         
                         // Säg till styrmodulen att använda armen ('v' som action)
                         unsigned char arm_packet[PACKET_SIZE] = {
@@ -562,6 +561,7 @@ int main() {
 
                         if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
                             is_rotating = true;
+                            action_timer_start = time(NULL); // Starta klockan
                         } else {
                             aktivt_beslut = 'f';
                         }
@@ -593,11 +593,32 @@ int main() {
                 }
             }
         }
+
+        // -------------------------------------------------------------
+        // 4. SKICKA TELEMETRI TILLBAKA TILL GUI
+        // -------------------------------------------------------------
+        if (gui_known) {
+            telemetry_counter++;
+            if (telemetry_counter >= 50) { // Körs var 100:e millisekund (10 Hz) vid usleep(2000)
+                unsigned char telemetry_packet[PACKET_SIZE] = {
+                    0x06,                         // 0x06 identifierar paketet som telemetri
+                    (unsigned char)current_phase, // Aktuell fas
+                    aktivt_beslut,                // Vad vi precis skickade till motorerna
+                    line_var,                     // Sensordata: Linje
+                    gyro1,                        // Sensordata: Gyro 1
+                    gyro2,                        // Sensordata: Gyro 2
+                    flags,                        // Sensordata: Flaggor
+                    0xFF                          // Footer
+                };
+                sendto(sockfd, telemetry_packet, PACKET_SIZE, 0, (struct sockaddr *)&cliaddr, len);
+                telemetry_counter = 0;
+            }
+        }
         
         // -------------------------------------------------------------
-        // 4. TINY DELAY (2000 microseconds = 2 milliseconds / 500Hz)
+        // 5. TINY DELAY (2000 microseconds = 2 milliseconds / 500Hz)
         // -------------------------------------------------------------
-        //usleep(2000); 
+        usleep(2000); 
     }
 
     close(sockfd);
