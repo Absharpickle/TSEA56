@@ -373,11 +373,11 @@ int main() {
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
 
-            flags_korsning = (flags & 12);
+            flags_korsning = (flags & 0x0C) >> 2; // bit 2-3 extraherade -> 0=ingen, 1=pickup, 2=korsning
             // flags_ny_korsning sätts BARA om vi inte redan har en okonsumerad flagga,
             // annars skriver sensorn över den innan state machine hunnit agera
             if (!flags_ny_korsning) {
-                flags_ny_korsning = (flags & 32);
+                flags_ny_korsning = (flags & 0x20); // bit 5: ny feature detekterad
             }
         }
 
@@ -472,7 +472,8 @@ int main() {
             } 
             else {
                 // NORMAL KÖRNING: Vi väntar på flaggan 'flags_ny_korsning' från sensorn
-                if (flags_ny_korsning) {
+                // flags_korsning == 2 betyder FEATURE_INTERSECTION, pickup (1) ska ej räkna upp index
+                if (flags_ny_korsning && flags_korsning == 2) {
                     flags_ny_korsning = 0; // Konsumera flaggan så att den inte triggar igen nästa loopvarv
                     // Index uppdateras BARA HÄR – en gång per korsning
                     current_action_index++;
