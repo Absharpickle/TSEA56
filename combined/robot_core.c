@@ -225,7 +225,7 @@ void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) { // Tar in vilke
 // 2. I2C, TELEMETRY & AUTO-INIT FUNKTIONER
 // =================================================================
 
-// Initierar verifikationsfilen
+// Initierar verifikationsfilen för utgående data
 void log_verification(const unsigned char *sent, char action) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
     if (f == NULL) return;
@@ -233,6 +233,18 @@ void log_verification(const unsigned char *sent, char action) {
     struct tm *t = localtime(&now);
     fprintf(f, "[%02d:%02d:%02d] ACTION '%c'\nSKICKAT (0x12): ", t->tm_hour, t->tm_min, t->tm_sec, action);
     for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", sent[i]);
+    fprintf(f, "\n\n");
+    fclose(f);
+}
+
+// Loggar sensordata i samma verifikationsfil
+void log_sensor_data(const unsigned char *received) {
+    FILE *f = fopen(VERIFY_LOG_FILE, "a");
+    if (f == NULL) return;
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    fprintf(f, "[%02d:%02d:%02d] SENSOR LÄST (0x10): ", t->tm_hour, t->tm_min, t->tm_sec);
+    for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", received[i]);
     fprintf(f, "\n\n");
     fclose(f);
 }
@@ -293,7 +305,6 @@ int main() {
     uint8_t flags = 0;
     uint8_t flags_korsning = 0;
     uint8_t flags_ny_korsning = 0;
-    uint8_t flags_obstacle = 0;
 
     init_karta(); // Initierar kartan
 
@@ -346,6 +357,14 @@ int main() {
         // -------------------------------------------------------------
         unsigned char sensor_packet[PACKET_SIZE];
         if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { // Om filen är öppen och PACKET_SIZE == 8... (read läser även in sensorpaketet)
+           
+            // Logga endast när datan från sensorn faktiskt ändras (för att inte spamma sönder filen)
+            static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
+            if (memcmp(sensor_packet, last_sensor_packet, PACKET_SIZE) != 0) {
+                log_sensor_data(sensor_packet);
+                memcpy(last_sensor_packet, sensor_packet, PACKET_SIZE);
+            }
+            
            // int16_t val1 = (int16_t)((sensor_packet[2] << 8) | sensor_packet[1]); //Fabian nils och adam bytte till little endian 1 till 2
            // int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
             
@@ -357,7 +376,6 @@ int main() {
 
             flags_korsning = (flags && 12);
             flags_ny_korsning = (flags && 32);
-            flags_obstacle = (flags && 16);
         }
 
         // -------------------------------------------------------------
@@ -516,56 +534,6 @@ int main() {
                     }
 
                     loop_counter = 0;
-                }
-
-                if (flags_obstacle) {
-                    printf("\n[!] HINDER UPPTÄCKT! Planerar om rutt...\n");
-
-                    // 1. Skicka stopp_packet
-                    unsigned char stop_packet[PACKET_SIZE] = {
-                        0x05, current_auto_state, 0x00, 's', 
-                        line_var, gyro1, gyro2, 0xFF
-                    };
-                    write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-
-                    // 2. Ta reda på aktuell nod och nästa nod
-                    int u_nod = -1, v_nod = -1;
-                    if (current_phase == PHASE_TO_ITEM) {
-                        u_nod = rutt_till_vara[current_action_index];
-                        v_nod = rutt_till_vara[current_action_index + 1];
-                    } else if (current_phase == PHASE_TO_HOME) {
-                        u_nod = rutt_hem[current_action_index];
-                        v_nod = rutt_hem[current_action_index + 1];
-                    }
-
-                    if (u_nod != -1 && v_nod != -1 && v_nod != STOP) {
-                        // 3. Stäng av vägen i kartan
-                        vag[u_nod][v_nod] = 0;
-                        vag[v_nod][u_nod] = 0;
-
-                        // 4. Vänd om (bakåt)
-                        unsigned char turn_back[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 'u', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, turn_back, PACKET_SIZE);
-                        // usleep(1500000); // Vänta medan roboten roterar 180 grader
-
-                        // 5. Beräkna ny riktning in och planera ny rutt från nod U
-                        char dir_mot_v = nodriktningsmatris[u_nod][v_nod];
-                        char dir_efter_vandning = get_motsatt_dir(dir_mot_v);
-                        
-                        planera_hela_resan(u_nod, dir_efter_vandning);
-                        current_action_index = 0;
-                        aktivt_beslut_fn(current_action_index);
-
-                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                            is_rotating = true;
-                            action_timer_start = time(NULL); // Starta klockan
-                        } else {
-                            aktivt_beslut = 'f';
-                        }
-                    }
                 }
             } // Stänger else (!is_rotating && !is_picking_up)
 
