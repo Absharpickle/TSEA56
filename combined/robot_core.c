@@ -11,7 +11,7 @@
 #include <linux/i2c-dev.h>
 #include <errno.h>
 #include <time.h>
-#include <stdint.h> // Required for int16_t and uint8_t
+#include <stdint.h> 
 
 // --- ALGORITHM DEFINITIONS ---
 #define NODES 26 // 5x5 samt en start/slutnod
@@ -29,17 +29,15 @@
 #define VERIFY_LOG_FILE "verifikation_keys.txt" // Loggfil
 
 // --- ALGORITHM GLOBALS ---
-char nodriktningsmatris[NODES][NODES]; // Väderstreck för vägarna (ex från (5) till (6) är östlig riktning 'e')
-int  vag[NODES][NODES]; // Huruvida vägen är aktiv/finns (ex väg mellan (0) och (20) finns ej och är 0)
-int  rutt_till_vara[NODES]; // Array med vägen (nodnummer) till varan
-int  rutt_hem[NODES]; // Array med vägen (nodnummer) från varan till slut
-char beslut_till_vara[NODES]; // Array med tecken (action) vid varje korsning
-char beslut_hem[NODES]; // Array med tecken (ACTION) vid varje korning hem
-int  vara_u, vara_v; // u och v är noder och varan ligger mellan dem och bestäms av input från persondatorn
+char nodriktningsmatris[NODES][NODES]; 
+int  vag[NODES][NODES]; 
+int  rutt_till_vara[NODES]; 
+int  rutt_hem[NODES]; 
+char beslut_till_vara[NODES]; 
+char beslut_hem[NODES]; 
+int  vara_u, vara_v; 
 
 // --- STATE MACHINE GLOBALS ---
-// Definierar datatypen 'autophase' som bara kan ta fyra värden
-// Används till att bestämma vad roboten håller på med just nu
 typedef enum {
     PHASE_IDLE = 0,
     PHASE_TO_ITEM,
@@ -47,64 +45,60 @@ typedef enum {
     PHASE_TO_HOME
 } AutoPhase;
 
-AutoPhase current_phase = PHASE_IDLE; // I början står roboten still
-int current_action_index = 0; // Index för att hämta aktuellt belut. Räknas upp när vi når korsning.
-unsigned char current_auto_state = 1; // Bestämmer STATE (auto, auto), (manuell, auto) osv
-bool log_next_action = false; // Har med logg att göra
+AutoPhase current_phase = PHASE_IDLE; 
+int current_action_index = 0; 
+unsigned char current_auto_state = 1; 
+bool log_next_action = false; 
 
-// Nya variabler för den icke-blockerande "blasting"-logiken
 bool is_rotating = false;
 bool is_picking_up = false;
-time_t action_timer_start = 0; // Timer för att ersätta styrmodulens svarsignal
-uint8_t korsning_aktiv = 0; // Håller koll på om vi är mitt i en korsning (Global för att kunna nollställas)
+time_t action_timer_start = 0; 
+uint8_t korsning_aktiv = 0; 
 
 // --- TELEMETRY GLOBALS FÖR GUI ---
-bool gui_known = false; // Har GUI:t hört av sig än?
-int telemetry_counter = 0; // Räknare för att inte spamma nätverket
+bool gui_known = false; 
+int telemetry_counter = 0; 
 
 // --- LOOP TIMING GLOBALS ---
-char nasta_beslut  = 's'; // Nästa beslut från beslutsarrayen (e, o, u, f, X osv)
-char aktivt_beslut = 's'; // Det som faktiskt skickas till styrmodulen ('f' nästan hela tiden, annars rotation/stopp)
-int  loop_counter = 0; // Räknar upp loopen för att se när nästa beslut ska skickas (just nu bara test)
+char nasta_beslut  = 's'; 
+char aktivt_beslut = 's'; 
+int  loop_counter = 0; 
 
 // =================================================================
 // 1. KARTA, HJÄLPFUNKTIONER & RUTTPLANERING
 // =================================================================
 void init_karta() {
-    memset(vag, 0, sizeof(vag)); // Sätter alla vägar inaktiva
-    memset(nodriktningsmatris, ' ', sizeof(nodriktningsmatris)); // Sätter alla väderstreck till blankkaraktärer
+    memset(vag, 0, sizeof(vag)); 
+    memset(nodriktningsmatris, ' ', sizeof(nodriktningsmatris)); 
 
-    // Loopar igenom alla noder
     for (int i = 0; i < 25; i++) {
-        int rad = i / 5; // Räknar ut vilken rad noden är på genom att avrunda aktuell nod / antal kolonner nedåt
-        int kol = i % 5; // Räkanr ut vilken kolonn noden är på genom att ta resten av aktuell nod / antal rader 
-        if (kol < 4) { vag[i][i+1] = 1; nodriktningsmatris[i][i+1] = 'e'; } // Noder på kolonn 0-3 har alltid en nod österut 'e' som är nästa nodnummer
-        if (kol > 0) { vag[i][i-1] = 1; nodriktningsmatris[i][i-1] = 'w'; } // Noder på kolonn 1-4 har alltid en nod västerut 'w' som är föregående nodnummer
-        if (rad < 4) { vag[i][i+5] = 1; nodriktningsmatris[i][i+5] = 's'; } // Noder på rad 0-3 har alltid en nod söderut 's' som är 5 nodnummer framåt
-        if (rad > 0) { vag[i][i-5] = 1; nodriktningsmatris[i][i-5] = 'n'; } // Noder på rad 1-4 har alltid en nod norrut 'n' som är 5 nodnummer bakåt
+        int rad = i / 5; 
+        int kol = i % 5; 
+        if (kol < 4) { vag[i][i+1] = 1; nodriktningsmatris[i][i+1] = 'e'; } 
+        if (kol > 0) { vag[i][i-1] = 1; nodriktningsmatris[i][i-1] = 'w'; } 
+        if (rad < 4) { vag[i][i+5] = 1; nodriktningsmatris[i][i+5] = 's'; } 
+        if (rad > 0) { vag[i][i-5] = 1; nodriktningsmatris[i][i-5] = 'n'; } 
     }
 
-    vag[START][0] = 1; // Aktivera vägen mellan startnod och nod 0 
-    vag[0][START] = 1; // Aktivera vägen mellan nod 0 och startnod (symmetrisk matris)
-    nodriktningsmatris[START][0] = 's'; // Förutsätter att start -> 0 är söderut
-    nodriktningsmatris[0][START] = 'n'; // Förutsäter att 0 -> start är norrut
+    vag[START][0] = 1; 
+    vag[0][START] = 1; 
+    nodriktningsmatris[START][0] = 's'; 
+    nodriktningsmatris[0][START] = 'n'; 
 }
 
-// Funktion som avgör svängriktning genom att jämföra väderstreck
 char get_turn(char nu, char nasta) {
     if (nu == nasta) return 'f';
-    if (nu == 'n' && nasta == 'e') return 'e'; // Rotation medsols
+    if (nu == 'n' && nasta == 'e') return 'e'; 
     if (nu == 'e' && nasta == 's') return 'e';
     if (nu == 's' && nasta == 'w') return 'e';
     if (nu == 'w' && nasta == 'n') return 'e';
-    if (nu == 'n' && nasta == 'w') return 'o'; // Rotation motsols
+    if (nu == 'n' && nasta == 'w') return 'o'; 
     if (nu == 'w' && nasta == 's') return 'o';
     if (nu == 's' && nasta == 'e') return 'o';
     if (nu == 'e' && nasta == 'n') return 'o';
-    return 'u'; // Rotation 180 grader
+    return 'u'; 
 }
 
-// Funktion som anger motsatt riktning
 char get_motsatt_dir(char nu) {
     if (nu == 's') return 'n';
     if (nu == 'n') return 's';
@@ -113,53 +107,49 @@ char get_motsatt_dir(char nu) {
     return nu; 
 }
 
-// Funktion som tar in en rutt och robotens startriktning och uppdaterar beslutsarrayen
 void bygg_beslut(int rutt[], char start_dir, char beslut[]) {
-    char dir = start_dir; // Hjälpvariabel
-    int i = 0; // Index
+    char dir = start_dir; 
+    int i = 0; 
 
-    // Loopa till dess att det inte finns något mer i rutten
     while (rutt[i + 1] != STOP) {
-        char nasta_dir = nodriktningsmatris[rutt[i]][rutt[i + 1]]; // Kollar vilken väderstreck noden har jämfört med nästa nod i rutten
-        beslut[i] = get_turn(dir, nasta_dir); // Jämför väderstreck med nästa väderstreck för att beräkna riktning och lagra i beslutet
+        char nasta_dir = nodriktningsmatris[rutt[i]][rutt[i + 1]]; 
+        beslut[i] = get_turn(dir, nasta_dir); 
         dir = nasta_dir;
         i++;
     }
-    beslut[i] = 'X'; // Sista beslutet är 'X' som betyder hämta/lämna varan
-    beslut[i+1] = '\0'; // Avslutar array
+    beslut[i] = 'X'; 
+    beslut[i+1] = '\0'; 
 }
 
-// Funktion som beräknar rutten genom BFS + kostnad för svängar
 int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
-    int kostnad[NODES]; // Varje nod har en kostnad för att ta sig dit
-    int foregaende[NODES]; // Varje nod har en föregående för att hålla koll på snabbaste vägen
-    char riktning_in[NODES]; // n, s, e, w
-    bool besokt[NODES] = {false}; // Huruvida noden är besökt eller ej
+    int kostnad[NODES]; 
+    int foregaende[NODES]; 
+    char riktning_in[NODES]; 
+    bool besokt[NODES] = {false}; 
 
-    for (int i = 0; i < NODES; i++) { // Sätt alla nodkostnader i början till oo
+    for (int i = 0; i < NODES; i++) { 
         kostnad[i] = 9999;
         foregaende[i] = NONE;
         rutt[i] = STOP;
     }
 
-    kostnad[start] = 0; // Ingen kostnad för startnoden
-    riktning_in[start] = start_dir; // Väderstreck in till startnod (robotens aktuella position)
+    kostnad[start] = 0; 
+    riktning_in[start] = start_dir; 
 
-    for (int i = 0; i < NODES; i++) { // Antal iterationer är mindre än antal noder
-        int u = -1; // u är aktuell nod som besöks i iterationen
+    for (int i = 0; i < NODES; i++) { 
+        int u = -1; 
         for (int j = 0; j < NODES; j++) {
-            if (!besokt[j] && (u == -1 || kostnad[j] < kostnad[u])) u = j; // Hittar billigaste ej besökta nod och tilldelar u
+            if (!besokt[j] && (u == -1 || kostnad[j] < kostnad[u])) u = j; 
         }
-        if (kostnad[u] == 9999 || u == mal) break; // Antingen om ingen väg finns eller målnod funnen, breaka
-        besokt[u] = true; // Annars börjar vi besöka nod u
+        if (kostnad[u] == 9999 || u == mal) break; 
+        besokt[u] = true; 
 
-        // Försöker hitta närliggande obesökta noder
         for (int v = 0; v < NODES; v++) {
-            if (vag[u][v] && !besokt[v]) { // Om vägen finns och ej är besökt...
-                char nasta_dir = nodriktningsmatris[u][v]; // 1. Hitta väderstreck till noden v
-                int straff = (riktning_in[u] != nasta_dir) ? 1 : 0; // 2. Straffa med 1 om väderstrecken mellan u och v skiljer sig (pga rotation)
-                int ny_kostnad = kostnad[u] + 100 + straff; // 3. Beräkna kostnaden för v  
-                if (ny_kostnad < kostnad[v]) { // Om ny kostnad < befintlig kostnad för nod v uppdateras v, föregående för v samt billigaste riktningen in i v
+            if (vag[u][v] && !besokt[v]) { 
+                char nasta_dir = nodriktningsmatris[u][v]; 
+                int straff = (riktning_in[u] != nasta_dir) ? 1 : 0; 
+                int ny_kostnad = kostnad[u] + 100 + straff; 
+                if (ny_kostnad < kostnad[v]) { 
                     kostnad[v] = ny_kostnad;
                     foregaende[v] = u;
                     riktning_in[v] = nasta_dir;
@@ -168,48 +158,42 @@ int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
         }
     }
 
-    // Funktion som beräknar rutten baklänges 
     int temp[NODES], c = 0, nu = mal;
     while (nu != NONE) {
         temp[c++] = nu;
         nu = foregaende[nu];
     }
 
-    // Hjälpfunktion för att sortera om rutten så att den blir i rätt ordning
     for (int i = 0; i < c; i++) rutt[i] = temp[c - 1 - i];
     return kostnad[mal];
 }
 
-// Beräknar beslut till vara och beslut hem oavsett var roboten befinner sig i kartan
-void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) { // Tar in vilken nod vi är på och i vilket väderstreck roboten är vänd mot
-    int rutt_alt1[NODES], rutt_alt2[NODES]; // Temporära variabler för rutt
+void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) { 
+    int rutt_alt1[NODES], rutt_alt2[NODES]; 
 
-    // Vilken av de närliggande noderna till varan ska vi köra in genom för att det ska bli billigast? 
     int kostnad1 = hitta_rutt(nuvarande_nod, vara_u, rutt_alt1, nuvarande_dir);
     int kostnad2 = hitta_rutt(nuvarande_nod, vara_v, rutt_alt2, nuvarande_dir);
     
     int ingang, utgang;
     if (kostnad1 <= kostnad2) {
-        ingang = vara_u; utgang = vara_v; // Om kostnad1 <= kostnad2 blir ingången via u och utgången via v
-        memcpy(rutt_till_vara, rutt_alt1, sizeof(rutt_alt1)); // rutt_till_vara tilldelas rutt_alt1 med storlek rutt_alt1
+        ingang = vara_u; utgang = vara_v; 
+        memcpy(rutt_till_vara, rutt_alt1, sizeof(rutt_alt1)); 
     } else {
-        ingang = vara_v; utgang = vara_u; // Tvärtom
+        ingang = vara_v; utgang = vara_u; 
         memcpy(rutt_till_vara, rutt_alt2, sizeof(rutt_alt2));
     }
 
-    // Roboten måste åka mellan målnoderna och därför sätter vi utgångsnoden till sista noden, men ej säkert att den åker genom/till den
     int i = 0;
     while (rutt_till_vara[i] != STOP) i++;
     rutt_till_vara[i] = utgang;
     rutt_till_vara[i+1] = STOP;
 
-    bygg_beslut(rutt_till_vara, nuvarande_dir, beslut_till_vara); // Omvandla till beslut
+    bygg_beslut(rutt_till_vara, nuvarande_dir, beslut_till_vara); 
     
-    char dir_vid_vara = nodriktningsmatris[ingang][utgang]; // Beräknar vilket väderstreck roboten har när den hämtat varan 
+    char dir_vid_vara = nodriktningsmatris[ingang][utgang]; 
     int cost_utgang = hitta_rutt(utgang, START, rutt_alt1, dir_vid_vara);
     int cost_ingang = hitta_rutt(ingang, START, rutt_alt2, dir_vid_vara) + 100; 
 
-    // Bestämmer huruvida roboten ska köra vidare till nästa nod eller vända och köra tillbaka (straff 100) efter att ha hämtat varan
     if (cost_utgang <= cost_ingang) {
         memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
         bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
@@ -227,7 +211,6 @@ void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) { // Tar in vilke
 // 2. I2C, TELEMETRY & AUTO-INIT FUNKTIONER
 // =================================================================
 
-// Initierar verifikationsfilen för utgående data
 void log_verification(const unsigned char *sent, char action) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
     if (f == NULL) return;
@@ -239,7 +222,6 @@ void log_verification(const unsigned char *sent, char action) {
     fclose(f);
 }
 
-// Loggar sensordata i samma verifikationsfil
 void log_sensor_data(const unsigned char *received) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
     if (f == NULL) return;
@@ -251,43 +233,40 @@ void log_sensor_data(const unsigned char *received) {
     fclose(f);
 }
 
-// Läser nästa beslut ur beslutsarrayen och lagrar i nasta_beslut (påverkar EJ aktivt_beslut direkt)
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
         nasta_beslut = beslut_till_vara[index];
     } else if (current_phase == PHASE_PICKUP) {
-        nasta_beslut = 'v'; // Arm pickup action OBS behöver uppdateras med faktiska beslut
+        nasta_beslut = 'v'; 
     } else if (current_phase == PHASE_TO_HOME) {
         nasta_beslut = beslut_hem[index];
     }
 }
 
-// Här sätts var varan ligger någonstans, behöver uppdateras och integreras med guin
 void start_autonomous_sequence(unsigned char state) {
     vara_u = 10; 
     vara_v = 11; 
     
     printf("\n=== CALCULATING AUTONOMOUS ROUTE ===\n");
-    planera_hela_resan(START, 's'); // Vi är pån startnoden och roboten är PRELIMINÄRT riktad söderut
+    planera_hela_resan(START, 's'); 
     
-    current_auto_state = state; // Kan vara (auto, auto) eller (auto, manuell)
-    current_phase = PHASE_TO_ITEM; // Kör mot varan
-    current_action_index = 0; // Var i beslutslistan vi är
-    korsning_aktiv = 0; // Nollställ korsningslås för ren start
+    current_auto_state = state; 
+    current_phase = PHASE_TO_ITEM; 
+    current_action_index = 0; 
+    korsning_aktiv = 0; 
     
-    loop_counter = 0; // Endast vid simulering
-    aktivt_beslut_fn(current_action_index); // Läs första beslutet ur arrayen
+    loop_counter = 0; 
+    aktivt_beslut_fn(current_action_index); 
     
     if (nasta_beslut == 'e' || nasta_beslut == 'o' || nasta_beslut == 'u') {
-        aktivt_beslut = nasta_beslut; // Starta direkt med rotation
+        aktivt_beslut = nasta_beslut; 
         is_rotating = true;
-        action_timer_start = time(NULL); // Starta klockan för sekvensen
+        action_timer_start = time(NULL); 
     } else {
         aktivt_beslut = 'f';
     }
 
-    log_next_action = true; // Har med logg att göra
-    
+    log_next_action = true; 
     printf("-> Route Calculated. Driving to item...\n");
 }
 
@@ -295,12 +274,11 @@ void start_autonomous_sequence(unsigned char state) {
 // 3. HUVUDPROGRAM
 // =================================================================
 int main() {
-    int sockfd, i2c_styr_fd, i2c_sens_fd; // Deklarera filbeskrivningsnummer, används till R/WR
-    struct sockaddr_in servaddr, cliaddr; // Deklarera familj (IPV4 eller IPV6), portnummer och IP-adress
-    unsigned char buffer[BUFFER_SIZE]; // Deklarera storlek på buffer
+    int sockfd, i2c_styr_fd, i2c_sens_fd; 
+    struct sockaddr_in servaddr, cliaddr; 
+    unsigned char buffer[BUFFER_SIZE]; 
     socklen_t len = sizeof(cliaddr); 
 
-    // Placeholders till sensorvärdena
     uint8_t line_var = 0;
     uint8_t angle = 0;
     uint8_t gyro1 = 0;
@@ -310,24 +288,22 @@ int main() {
     uint8_t flags_korsning = 0;
     uint8_t flags_ny_korsning = 0;
 
-    init_karta(); // Initierar kartan
+    init_karta(); 
 
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
     printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
-    // SETUP I2C - STYRKOMM (0x12)
-    i2c_styr_fd = open(I2C_DEVICE, O_RDWR); // Öppnar fil till styrmodulen som ger filbeskrivningsnummer som kan läsas och skrivas till
-    if (i2c_styr_fd >= 0) { // Om filen är gick att öppna...
-        ioctl(i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); // Tilldela egenskaper till filen (slav, adress)
-        if (write(i2c_styr_fd, NULL, 0) < 0) { // Om det inte går att fysiskt skriva till adressen...
-            printf("[WARNING] Motor Controller (0x12) missing. Running in Sim Mode.\n"); // kör i simulerat läge
+    i2c_styr_fd = open(I2C_DEVICE, O_RDWR); 
+    if (i2c_styr_fd >= 0) { 
+        ioctl(i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); 
+        if (write(i2c_styr_fd, NULL, 0) < 0) { 
+            printf("[WARNING] Motor Controller (0x12) missing. Running in Sim Mode.\n"); 
         } else {
-            printf("Connected to Motor Controller (0x12)\n"); // Annars, kör som tänkt
+            printf("Connected to Motor Controller (0x12)\n"); 
         }
     }
 
-    // SETUP I2C - SENSOR (0x10)
     i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
     if (i2c_sens_fd >= 0) {
         ioctl(i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
@@ -338,22 +314,20 @@ int main() {
         }
     }
 
-    // SETUP UDP
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { // Skapar socket för att kunna kommunicera med persondatorn
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { 
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
     
-    // TILLÄGG: Tillåt återanvändning av adress/port direkt så vi slipper "Bind failed"-felet
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    memset(&servaddr, 0, sizeof(servaddr)); // Ladda pekaren med nollor
-    servaddr.sin_family = AF_INET; // IPV4 eller IPV6
-    servaddr.sin_addr.s_addr = INADDR_ANY; // Tar in IP-adressen för persondatorn
-    servaddr.sin_port = htons(UDP_PORT); // Sätter porten att kommunicera via
+    memset(&servaddr, 0, sizeof(servaddr)); 
+    servaddr.sin_family = AF_INET; 
+    servaddr.sin_addr.s_addr = INADDR_ANY; 
+    servaddr.sin_port = htons(UDP_PORT); 
 
-    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) { // Binder socket till IP-adressen
+    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) { 
         perror("Bind failed");
         exit(EXIT_FAILURE);
     }
@@ -365,9 +339,8 @@ int main() {
         // 1. READ FROM SENSOR (0x10)
         // -------------------------------------------------------------
         unsigned char sensor_packet[PACKET_SIZE];
-        if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { // Om filen är öppen och PACKET_SIZE == 8... (read läser även in sensorpaketet)
+        if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { 
            
-            // Logga endast när datan från sensorn faktiskt ändras (för att inte spamma sönder filen)
             static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
             if (memcmp(sensor_packet, last_sensor_packet, PACKET_SIZE) != 0) {
                 log_sensor_data(sensor_packet);
@@ -380,23 +353,20 @@ int main() {
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
 
-            flags_korsning = (flags & 0x0C) >> 2; // bit 2-3 extraherade -> 0=ingen, 1=pickup, 2=korsning
-            // flags_ny_korsning sätts BARA om vi inte redan har en okonsumerad flagga,
-            // annars skriver sensorn över den innan state machine hunnit agera
+            flags_korsning = (flags & 0x0C) >> 2; 
+            
             if (!flags_ny_korsning) {
-                flags_ny_korsning = (flags & 0x20) >> 4; // bit 5: ny feature detekterad
+                flags_ny_korsning = (flags & 0x20) >> 4; 
             }
         }
 
         // -------------------------------------------------------------
         // 2. CHECK FOR NETWORK PACKETS (INSTANTLY)
         // -------------------------------------------------------------
-
-        // Läs in från persondatorn
         int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
         
         if (n > 0) {
-            gui_known = true; // Vi har fått ett paket, nu vet vi GUI:ts IP och port!
+            gui_known = true; 
         }
 
         if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
@@ -405,11 +375,9 @@ int main() {
             char action = (char)buffer[3];
 
             if (state == 0x00 || state == 0x01) {
-                // Start Auto Mode if 'f' is pressed
                 if (action == 'f' && current_phase == PHASE_IDLE) {
                     start_autonomous_sequence(state);
                 } else {
-                    // Inject Sensor Data before forwarding!
                     buffer[4] = line_var;
                     buffer[5] = gyro1;
                     buffer[6] = gyro2;
@@ -419,18 +387,16 @@ int main() {
                     printf("-> Manual Command Forwarded: '%c'\n", action);
                 }
             } else if (state == 0x02 || state == 0x03) {
-                // MANUAL OVERRIDE
                 if (current_phase != PHASE_IDLE) {
                     printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
                     current_phase = PHASE_IDLE;
                     is_rotating = false;
                     is_picking_up = false;
-                    current_action_index = 0; // Nollställ index
-                    korsning_aktiv = 0;       // Nollställ korsningslås
-                    aktivt_beslut = 's';      // Stanna roboten (internt)
+                    current_action_index = 0; 
+                    korsning_aktiv = 0;       
+                    aktivt_beslut = 's';      
                 }
                 
-                // Inject Sensor Data before forwarding!
                 buffer[4] = line_var;
                 buffer[5] = gyro1;
                 buffer[6] = gyro2;
@@ -444,12 +410,11 @@ int main() {
         // -------------------------------------------------------------
         // 3. AUTONOMOUS STATE MACHINE (INTERSECTION-BASED TRIGGERS)
         // -------------------------------------------------------------
-        if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
+        if (current_phase != PHASE_IDLE) { 
             
             time_t elapsed_in_state = time(NULL) - action_timer_start;
 
             if (is_rotating) {
-                // Efter 3 sekunders rotation (justerbart) anser vi svängen klar och kör framåt igen
                 if (elapsed_in_state >= 3) { 
                     is_rotating = false;
                     aktivt_beslut = 'f';
@@ -457,20 +422,18 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                // Efter 2 sekunder stoppat vid varan byter vi till arm-aktion 'v'
                 if (elapsed_in_state >= 2 && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
                     log_next_action = true;
                 }
-                // Efter totalt 5 sekunder (2s stopp + 3s plock) är fasen klar
                 else if (elapsed_in_state >= 5) {
                     is_picking_up = false;
                     current_phase = PHASE_TO_HOME;
-                    current_action_index = 0; // Index nollställs vid fasövergång
-                    aktivt_beslut_fn(current_action_index); // Läs första beslutet för hemresan
+                    current_action_index = 0; 
+                    aktivt_beslut_fn(current_action_index); 
                     
                     if (nasta_beslut == 'e' || nasta_beslut == 'o' || nasta_beslut == 'u') {
-                        aktivt_beslut = nasta_beslut; // Sätt rotation som aktivt beslut
+                        aktivt_beslut = nasta_beslut; 
                         is_rotating = true;
                         action_timer_start = time(NULL);
                     } else {
@@ -482,39 +445,35 @@ int main() {
             } 
             else {
                 // NORMAL KÖRNING: Vi väntar på flaggan 'flags_korsning' från sensorn
-                // flags_korsning == 2 betyder FEATURE_INTERSECTION, pickup (1) ska ej räkna upp index
-                if (flags_korsning == 2 && !korsning_aktiv) {
-                    korsning_aktiv = 1;    // Vi är på korsningen, sätt flaggan så vi inte triggar igen
-                    flags_ny_korsning = 0; // Konsumera flaggan så att den inte triggar igen nästa loopvarv
+                // flags_korsning == 2 (korsning) ELLER flags_korsning == 1 (pickup)
+                if ((flags_korsning == 2 || flags_korsning == 1) && !korsning_aktiv) {
+                    korsning_aktiv = 1;    
+                    flags_ny_korsning = 0; 
                     
-                    // Index uppdateras BARA HÄR – en gång per korsning
                     current_action_index++;
-                    aktivt_beslut_fn(current_action_index); // Läs nästa beslut ur arrayen
-                    action_timer_start = time(NULL); // Nollställ timern för den nya manövern
+                    aktivt_beslut_fn(current_action_index); 
+                    action_timer_start = time(NULL); 
 
                     if (nasta_beslut == 'e' || nasta_beslut == 'o' || nasta_beslut == 'u') {
-                        // Skicka stopp först (säkerställer renare rotation)
                         unsigned char stop_packet[PACKET_SIZE] = {
                             0x05, current_auto_state, 0x00, 's', 
                             line_var, gyro1, gyro2, 0xFF
                         };
                         write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         
-                        aktivt_beslut = nasta_beslut; // Sätt rotation som aktivt beslut
+                        aktivt_beslut = nasta_beslut; 
                         is_rotating = true;
                         log_next_action = true;
                     }
                     else if (nasta_beslut == 'X') {
                         if (current_phase == PHASE_TO_ITEM) {
-                            // Vi är framme vid varan, stanna först
-                            current_phase = PHASE_PICKUP; // NYTT: Uppdatera fasen för att aktivera arm-logiken!
+                            current_phase = PHASE_PICKUP; 
                             aktivt_beslut = 's';
                             is_picking_up = true;
                             printf("\n-> PHASE CHANGE: Stopping before pickup...\n");
                             log_next_action = true;
                         }
                         else if (current_phase == PHASE_TO_HOME) {
-                            // Vi är tillbaka vid startnoden
                             current_phase = PHASE_IDLE;
                             aktivt_beslut = 's';
                             printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
@@ -527,40 +486,35 @@ int main() {
                         }
                     }
                     else {
-                        // Beslutet är 'f', fortsätt bara rakt framåt
                         aktivt_beslut = 'f';
                         log_next_action = true;
                     }
                 } 
-                else if (flags_korsning != 2) {
-                    korsning_aktiv = 0; // Vi har rullat av korsningen, redo för nästa!
+                else if (flags_korsning == 0) {
+                    korsning_aktiv = 0; // Vi har rullat helt av korsningen/markeringen
                 }
             }
 
-            // BLAST THE CURRENT ACTION CONTINUOUSLY (Varje varv i loopen, 500Hz)
             if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
                 
                 unsigned char auto_packet[PACKET_SIZE] = {
                     0x05, 
                     current_auto_state, 
-                    (current_phase == PHASE_PICKUP && aktivt_beslut == 'v') ? 0x01 : 0x00, // Arm or Wheel
+                    (current_phase == PHASE_PICKUP && aktivt_beslut == 'v') ? 0x01 : 0x00, 
                     aktivt_beslut, 
-                    line_var,  // Inject calculated line sensor
-                    gyro1,     // Inject direct gyro 1
-                    gyro2,     // Inject direct gyro 2
+                    line_var,  
+                    gyro1,     
+                    gyro2,     
                     0xFF
                 };
 
-                // Skicka till mikrokontrollern (I2C) 500ggr/s
                 write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 
-                // Terminalutskrift vid förändring
                 if (log_next_action) {
                     printf("Action updated to: '%c' (Index: %d)\n", auto_packet[3], current_action_index);
                     log_next_action = false;
                 }
 
-                // Loggning till fil ( throttlad till 10Hz för att inte skada SD-kortet)
                 static int blasting_log_counter = 0;
                 blasting_log_counter++;
                 if (blasting_log_counter >= 50) { 
@@ -577,14 +531,14 @@ int main() {
             telemetry_counter++;
             if (telemetry_counter >= 50) { 
                 unsigned char telemetry_packet[PACKET_SIZE] = {
-                    0x06,                         // 0x06 identifierar paketet som telemetri
-                    (unsigned char)current_phase, // Aktuell fas
-                    aktivt_beslut,                // Vad vi skickar till motorerna
-                    line_var,                     // Sensordata: Linje
-                    gyro1,                        // Sensordata: Gyro 1
-                    gyro2,                        // Sensordata: Gyro 2
-                    flags,                        // Sensordata: Flaggor (bitmaskade)
-                    0xFF                          // Footer
+                    0x06,                         // [0] 0x06 identifierar paketet som telemetri
+                    (unsigned char)current_phase, // [1] Aktuell fas
+                    aktivt_beslut,                // [2] Vad vi skickar till motorerna
+                    line_var,                     // [3] Sensordata: Linje
+                    (unsigned char)nasta_beslut,  // [4] BYTT: Nästa beslut istället för gyro1
+                    0x00,                         // [5] BYTT: Tom byte (padding) istället för gyro2
+                    flags,                        // [6] Sensordata: Flaggor (bitmaskade)
+                    0xFF                          // [7] Footer
                 };
                 sendto(sockfd, telemetry_packet, PACKET_SIZE, 0, (struct sockaddr *)&cliaddr, len);
                 telemetry_counter = 0;
