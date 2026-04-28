@@ -56,7 +56,6 @@ bool log_next_action = false; // Har med logg att göra
 bool is_rotating = false;
 bool is_picking_up = false;
 time_t action_timer_start = 0; // Timer för att ersätta styrmodulens svarsignal
-int blasting_counter = 0; // Räknare för att lugna ned skickandet till motorerna
 
 // --- TELEMETRY GLOBALS FÖR GUI ---
 bool gui_known = false; // Har GUI:t hört av sig än?
@@ -521,9 +520,8 @@ int main() {
                 }
             }
 
-            // BLAST THE CURRENT ACTION CONTINUOUSLY
-            blasting_counter++;
-            if (blasting_counter >= 50) { // Skickar var 100:e millisekund (10 Hz)
+            // BLAST THE CURRENT ACTION CONTINUOUSLY EVERY ITERATION (500Hz)
+            if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
                 
                 unsigned char auto_packet[PACKET_SIZE] = {
                     0x05, 
@@ -536,7 +534,7 @@ int main() {
                     0xFF
                 };
 
-                // SEND TO MICROCONTROLLER EVERY 100ms
+                // SEND TO MICROCONTROLLER EVERY LOOP ITERATION
                 write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 
                 if (log_next_action) {
@@ -544,8 +542,6 @@ int main() {
                     printf("Action updated to: '%c'\n", auto_packet[3]);
                     log_next_action = false;
                 }
-                
-                blasting_counter = 0;
             }
         }
 
