@@ -374,7 +374,11 @@ int main() {
             gyro2 = sensor_packet[7];
 
             flags_korsning = (flags & 12);
-            flags_ny_korsning = (flags & 32);
+            // flags_ny_korsning sätts BARA om vi inte redan har en okonsumerad flagga,
+            // annars skriver sensorn över den innan state machine hunnit agera
+            if (!flags_ny_korsning) {
+                flags_ny_korsning = (flags & 32);
+            }
         }
 
         // -------------------------------------------------------------
@@ -469,6 +473,7 @@ int main() {
             else {
                 // NORMAL KÖRNING: Vi väntar på flaggan 'flags_ny_korsning' från sensorn
                 if (flags_ny_korsning) {
+                    flags_ny_korsning = 0; // Konsumera flaggan så att den inte triggar igen nästa loopvarv
                     // Index uppdateras BARA HÄR – en gång per korsning
                     current_action_index++;
                     aktivt_beslut_fn(current_action_index); // Läs nästa beslut ur arrayen
