@@ -277,11 +277,11 @@ void start_autonomous_sequence(unsigned char state) {
     
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
         is_rotating = true;
+        action_timer_start = time(NULL); // Starta klockan för sekvensen
     } else {
         aktivt_beslut = 'f';
     }
 
-    action_timer_start = time(NULL); // Starta klockan för sekvensen
     log_next_action = true; // Har med logg att göra
     
     printf("-> Route Calculated. Driving to item...\n");
@@ -303,6 +303,8 @@ int main() {
     uint8_t gyro2 = 0;
     
     uint8_t flags = 0;
+    uint8_t flags_korsning = 0;
+    uint8_t flags_ny_korsning = 0;
 
     init_karta(); // Initierar kartan
 
@@ -363,17 +365,14 @@ int main() {
                 memcpy(last_sensor_packet, sensor_packet, PACKET_SIZE);
             }
             
-           // int16_t val1 = (int16_t)((sensor_packet[2] << 8) | sensor_packet[1]); //Fabian nils och adam bytte till little endian 1 till 2
-           // int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
-            
             flags = sensor_packet[0];
             line_var = sensor_packet[1];
             angle = sensor_packet[2];
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
-            
-            // Sensordatans flaggor (som korsning) styr inte längre logiken, 
-            // men vi läser in dem så de kan vidarebefordras till GUI och motorer!
+
+            flags_korsning = (flags & 12);
+            flags_ny_korsning = (flags & 32);
         }
 
         // -------------------------------------------------------------
@@ -427,34 +426,28 @@ int main() {
         }
 
         // -------------------------------------------------------------
-        // 3. AUTONOMOUS STATE MACHINE (PURELY TIMER-BASED, IGNORING SENSORS)
+        // 3. AUTONOMOUS STATE MACHINE (INTERSECTION-BASED TRIGGERS)
         // -------------------------------------------------------------
         if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
             
-            // Kolla hur många sekunder som passerat i den aktuella fasen
-            time_t elapsed_time = time(NULL) - action_timer_start;
-            
-            // --- ROTATIONS-LOGIK ---
+            time_t elapsed_in_state = time(NULL) - action_timer_start;
+
             if (is_rotating) {
-                // Efter 5 sekunders rotation går vi framåt igen
-                if (elapsed_time >= 5) {
+                // Efter 3 sekunders rotation (justerbart) anser vi svängen klar och kör framåt igen
+                if (elapsed_in_state >= 3) { 
                     is_rotating = false;
                     aktivt_beslut = 'f';
                     log_next_action = true;
-                    action_timer_start = time(NULL); // Nollställ timer
                 }
             } 
-            
-            // --- PLOCK-LOGIK (Med Stopp först!) ---
             else if (is_picking_up) {
-                // Efter 2 sekunders stopp byter vi till armen
-                if (elapsed_time >= 2 && aktivt_beslut == 's') {
+                // Efter 2 sekunder stoppat vid varan byter vi till arm-aktion 'v'
+                if (elapsed_in_state >= 2 && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
                     log_next_action = true;
-                    printf("\n-> Executing arm pickup...\n");
                 }
-                // Efter 3 sekunder totalt (2s stopp + 1s plock), åker vi hem
-                else if (elapsed_time >= 5) {
+                // Efter totalt 5 sekunder (2s stopp + 3s plock) är fasen klar
+                else if (elapsed_in_state >= 5) {
                     is_picking_up = false;
                     current_phase = PHASE_TO_HOME;
                     current_action_index = 0;
@@ -462,53 +455,62 @@ int main() {
                     
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
                         is_rotating = true;
+                        action_timer_start = time(NULL);
                     } else {
                         aktivt_beslut = 'f';
                     }
                     printf("\n-> PHASE CHANGE: Heading Home...\n");
                     log_next_action = true;
-                    action_timer_start = time(NULL); // Nollställ timer
                 }
             } 
-            
-            // --- FRAMÅT-KÖRNINGS-LOGIK ---
             else {
-                // Vi körde framåt i 3 sekunder, detta räknas som att vi "nått nästa korsning"
-                if (elapsed_time >= 3) {
+                // NORMAL KÖRNING: Vi väntar på flaggan 'flags_ny_korsning' från sensorn
+                if (flags_ny_korsning) {
                     current_action_index++;
                     aktivt_beslut_fn(current_action_index);
+                    action_timer_start = time(NULL); // Nollställ timern för den nya manövern
 
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                        // Skicka stopp först (säkerställer renare rotation)
+                        unsigned char stop_packet[PACKET_SIZE] = {
+                            0x05, current_auto_state, 0x00, 's', 
+                            line_var, gyro1, gyro2, 0xFF
+                        };
+                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
+                        
                         is_rotating = true;
                         log_next_action = true;
                     }
                     else if (aktivt_beslut == 'X') {
                         if (current_phase == PHASE_TO_ITEM) {
-                            current_phase = PHASE_PICKUP;
-                            // SÄTT AKTIVT BESLUT TILL STOPP HÄR!
-                            aktivt_beslut = 's'; 
+                            // Vi är framme vid varan, stanna först
+                            aktivt_beslut = 's';
                             is_picking_up = true;
-                            
                             printf("\n-> PHASE CHANGE: Stopping before pickup...\n");
                             log_next_action = true;
                         }
                         else if (current_phase == PHASE_TO_HOME) {
-                            // Hemma!
+                            // Vi är tillbaka vid startnoden
                             current_phase = PHASE_IDLE;
                             aktivt_beslut = 's';
                             printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
+                            
+                            unsigned char stop_packet[PACKET_SIZE] = {
+                                0x05, current_auto_state, 0x00, 's', 
+                                line_var, gyro1, gyro2, 0xFF
+                            };
+                            write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         }
                     }
                     else {
-                        // Bara att fortsätta framåt till nästa korsning
+                        // Beslutet är 'f', fortsätt bara rakt framåt
                         aktivt_beslut = 'f';
                         log_next_action = true;
                     }
-                    action_timer_start = time(NULL); // Nollställ timer
                 }
             }
 
-            // BLAST THE CURRENT ACTION CONTINUOUSLY (Varje varv i loopen)
+            // BLAST THE CURRENT ACTION CONTINUOUSLY (Varje varv i loopen, 500Hz)
             if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
                 
                 unsigned char auto_packet[PACKET_SIZE] = {
@@ -522,17 +524,16 @@ int main() {
                     0xFF
                 };
 
-                // Skicka faktiskt till mikrokontrollern (I2C) 500ggr/s
+                // Skicka till mikrokontrollern (I2C) 500ggr/s
                 write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 
-                // Utskrift till terminalen sker BARA när vi byter beslut (för att inte krascha terminalen)
+                // Terminalutskrift vid förändring
                 if (log_next_action) {
-                    printf("Action updated to: '%c'\n", auto_packet[3]);
+                    printf("Action updated to: '%c' (Index: %d)\n", auto_packet[3], current_action_index);
                     log_next_action = false;
                 }
 
-                // Loggning till filen sker throttlat till 10Hz för att inte skada SD-kortet, 
-                // men det bevisar att I2C-blasting pågår!
+                // Loggning till fil ( throttlad till 10Hz för att inte skada SD-kortet)
                 static int blasting_log_counter = 0;
                 blasting_log_counter++;
                 if (blasting_log_counter >= 50) { 
@@ -543,19 +544,19 @@ int main() {
         }
 
         // -------------------------------------------------------------
-        // 4. SKICKA TELEMETRI TILLBAKA TILL GUI
+        // 4. SKICKA TELEMETRI TILLBAKA TILL GUI (10Hz)
         // -------------------------------------------------------------
         if (gui_known) {
             telemetry_counter++;
-            if (telemetry_counter >= 50) { // Körs var 100:e millisekund (10 Hz) vid usleep(2000)
+            if (telemetry_counter >= 50) { 
                 unsigned char telemetry_packet[PACKET_SIZE] = {
                     0x06,                         // 0x06 identifierar paketet som telemetri
                     (unsigned char)current_phase, // Aktuell fas
-                    aktivt_beslut,                // Vad vi precis skickade till motorerna
+                    aktivt_beslut,                // Vad vi skickar till motorerna
                     line_var,                     // Sensordata: Linje
                     gyro1,                        // Sensordata: Gyro 1
                     gyro2,                        // Sensordata: Gyro 2
-                    flags,                        // Sensordata: Flaggor
+                    flags,                        // Sensordata: Flaggor (bitmaskade)
                     0xFF                          // Footer
                 };
                 sendto(sockfd, telemetry_packet, PACKET_SIZE, 0, (struct sockaddr *)&cliaddr, len);
