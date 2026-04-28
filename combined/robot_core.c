@@ -377,7 +377,7 @@ int main() {
             // flags_ny_korsning sätts BARA om vi inte redan har en okonsumerad flagga,
             // annars skriver sensorn över den innan state machine hunnit agera
             if (!flags_ny_korsning) {
-                flags_ny_korsning = (flags & 0x20); // bit 5: ny feature detekterad
+                flags_ny_korsning = (flags & 0x20) >> 4; // bit 5: ny feature detekterad
             }
         }
 
@@ -473,7 +473,7 @@ int main() {
             else {
                 // NORMAL KÖRNING: Vi väntar på flaggan 'flags_ny_korsning' från sensorn
                 // flags_korsning == 2 betyder FEATURE_INTERSECTION, pickup (1) ska ej räkna upp index
-                if (flags_ny_korsning && flags_korsning == 2) {
+                if (flags_korsning == 2) { //tog bort flags_ny_korsning då dne ej fungerade
                     flags_ny_korsning = 0; // Konsumera flaggan så att den inte triggar igen nästa loopvarv
                     // Index uppdateras BARA HÄR – en gång per korsning
                     current_action_index++;
