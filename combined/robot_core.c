@@ -375,8 +375,9 @@ int main() {
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
 
-            flags_korsning = (flags && 12);
-            flags_ny_korsning = (flags && 32);
+            // RÄTTAT: Använd bitvis OCH (&) istället för logiskt OCH (&&)
+            flags_korsning = (flags & 12);
+            flags_ny_korsning = (flags & 32);
         }
 
         // -------------------------------------------------------------
@@ -491,7 +492,8 @@ int main() {
                             aktivt_beslut = 'f';
                         }
                     }
-                    else if ((flags_korsning == 1) && (aktivt_beslut == 'X')) {
+                    // TILLAGT: Kolla att vi faktiskt är på väg till varan så den inte plockar upp den hemma
+                    else if ((flags_korsning == 1) && (aktivt_beslut == 'X') && (current_phase == PHASE_TO_ITEM)) {
                         // Plocka upp vara (FEATURE_PICKUP)
                         unsigned char stop_packet[PACKET_SIZE] = {
                             0x05, current_auto_state, 0x00, 's', 
