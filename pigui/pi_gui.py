@@ -42,18 +42,19 @@ class TelemetryThread(QThread):
             try:
                 data, addr = self.sock.recvfrom(1024)
                 # Check if it's our 8-byte telemetry packet (Starts with 0x06, Ends with 0xFF)
-                if len(data) == 8 and data[0] == 0x06 and data[7] == 0xFF:
+                if len(data) == 9 and data[0] == 0x06 and data[8] == 0xFF:
                     # Unpack 8 unsigned bytes
-                    unpacked = struct.unpack('8B', data)
+                    unpacked = struct.unpack('9B', data)
                     
                     # Create a dictionary of the received data
                     telemetry_data = {
                         'phase': unpacked[1],
                         'action': chr(unpacked[2]), # Convert ASCII code back to character
-                        'line_var': unpacked[3],
-                        'gyro1': unpacked[4],
-                        'gyro2': unpacked[5],
-                        'flags': unpacked[6]
+                        'next_action': chr(unpacked[3]),
+                        'line_var': unpacked[4],
+                        'gyro1': unpacked[5],
+                        'gyro2': unpacked[6],
+                        'flags': unpacked[7]
                     }
                     self.telemetry_signal.emit(telemetry_data)
             except socket.timeout:
@@ -132,11 +133,12 @@ class MainWindow(QMainWindow):
         
         self.lbl_phase = QLabel("Phase: IDLE")
         self.lbl_action = QLabel("Last Action: -")
+        self.lbl_next_action = QLabel("Next Action: -")
         self.lbl_line = QLabel("Line: 0")
         self.lbl_gyro = QLabel("Gyro: (0, 0)")
         self.lbl_flags = QLabel("Flags: 0")
         
-        for lbl in [self.lbl_phase, self.lbl_action, self.lbl_line, self.lbl_gyro, self.lbl_flags]:
+        for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action, self.lbl_line, self.lbl_gyro, self.lbl_flags]:
             lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; padding: 5px;")
             self.dashboard_layout.addWidget(lbl)
             
@@ -160,6 +162,7 @@ class MainWindow(QMainWindow):
         phase_str = self.phase_names.get(data['phase'], "UNKNOWN")
         self.lbl_phase.setText(f"Phase: {phase_str}")
         self.lbl_action.setText(f"Action: '{data['action']}'")
+        self.lbl_next_action.setText(f"Next Action: '{data['next_action']}'")
         self.lbl_line.setText(f"Line: {data['line_var']}")
         self.lbl_gyro.setText(f"Gyro: ({data['gyro1']}, {data['gyro2']})")
         self.lbl_flags.setText(f"Flags: {data['flags']}")

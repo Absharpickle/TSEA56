@@ -576,17 +576,18 @@ int main() {
         if (gui_known) {
             telemetry_counter++;
             if (telemetry_counter >= 50) { 
-                unsigned char telemetry_packet[PACKET_SIZE] = {
+                unsigned char telemetry_packet[(PACKET_SIZE+1)] = {
                     0x06,                         // 0x06 identifierar paketet som telemetri
                     (unsigned char)current_phase, // Aktuell fas
                     aktivt_beslut,                // Vad vi skickar till motorerna
+                    nasta_beslut,                 // Nästa beslut som ska skickas till motorerna
                     line_var,                     // Sensordata: Linje
                     gyro1,                        // Sensordata: Gyro 1
                     gyro2,                        // Sensordata: Gyro 2
                     flags,                        // Sensordata: Flaggor (bitmaskade)
                     0xFF                          // Footer
                 };
-                sendto(sockfd, telemetry_packet, PACKET_SIZE, 0, (struct sockaddr *)&cliaddr, len);
+                sendto(sockfd, telemetry_packet, (PACKET_SIZE+1), 0, (struct sockaddr *)&cliaddr, len);
                 telemetry_counter = 0;
             }
         }
