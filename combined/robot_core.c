@@ -431,18 +431,30 @@ int main() {
         // -------------------------------------------------------------
         if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
             
-            // Varje steg i logiken sker oberoende av sensorer, enbart baserat på att tid har gått
-            if (time(NULL) - action_timer_start >= 5) {
-                
-                if (is_rotating) {
-                    // Efter 5 sekunders rotation går vi framåt igen
+            // Kolla hur många sekunder som passerat i den aktuella fasen
+            time_t elapsed_time = time(NULL) - action_timer_start;
+            
+            // --- ROTATIONS-LOGIK ---
+            if (is_rotating) {
+                // Efter 5 sekunders rotation går vi framåt igen
+                if (elapsed_time >= 5) {
                     is_rotating = false;
                     aktivt_beslut = 'f';
                     log_next_action = true;
                     action_timer_start = time(NULL); // Nollställ timer
-                } 
-                else if (is_picking_up) {
-                    // Efter 5 sekunders plock är varan upphämtad, vi åker hem
+                }
+            } 
+            
+            // --- PLOCK-LOGIK (Med Stopp först!) ---
+            else if (is_picking_up) {
+                // Efter 2 sekunders stopp byter vi till armen
+                if (elapsed_time >= 2 && aktivt_beslut == 's') {
+                    aktivt_beslut = 'v';
+                    log_next_action = true;
+                    printf("\n-> Executing arm pickup...\n");
+                }
+                // Efter 5 sekunder totalt (2s stopp + 3s plock), åker vi hem
+                else if (elapsed_time >= 5) {
                     is_picking_up = false;
                     current_phase = PHASE_TO_HOME;
                     current_action_index = 0;
@@ -456,45 +468,28 @@ int main() {
                     printf("\n-> PHASE CHANGE: Heading Home...\n");
                     log_next_action = true;
                     action_timer_start = time(NULL); // Nollställ timer
-                } 
-                else {
-                    // Vi körde framåt i 5 sekunder, detta räknas som att vi "nått nästa korsning"
+                }
+            } 
+            
+            // --- FRAMÅT-KÖRNINGS-LOGIK ---
+            else {
+                // Vi körde framåt i 5 sekunder, detta räknas som att vi "nått nästa korsning"
+                if (elapsed_time >= 5) {
                     current_action_index++;
                     aktivt_beslut_fn(current_action_index);
 
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                        // 1. Skicka stopp_packet till styr
-                        unsigned char stop_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 's', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                        
-                        // 2. Påbörja rotation
                         is_rotating = true;
                         log_next_action = true;
                     }
                     else if (aktivt_beslut == 'X') {
                         if (current_phase == PHASE_TO_ITEM) {
-                            // Plocka upp vara (FEATURE_PICKUP)
-                            unsigned char stop_packet[PACKET_SIZE] = {
-                                0x05, current_auto_state, 0x00, 's', 
-                                line_var, gyro1, gyro2, 0xFF
-                            };
-                            write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-
                             current_phase = PHASE_PICKUP;
-                            aktivt_beslut = 'v';
+                            // SÄTT AKTIVT BESLUT TILL STOPP HÄR!
+                            aktivt_beslut = 's'; 
                             is_picking_up = true;
                             
-                            // Säg till styrmodulen att använda armen ('v' som action)
-                            unsigned char arm_packet[PACKET_SIZE] = {
-                                0x05, current_auto_state, 0x01, 'v', 
-                                line_var, gyro1, gyro2, 0xFF
-                            };
-                            write(i2c_styr_fd, arm_packet, PACKET_SIZE);
-                            
-                            printf("\n-> PHASE CHANGE: Picking up item...\n");
+                            printf("\n-> PHASE CHANGE: Stopping before pickup...\n");
                             log_next_action = true;
                         }
                         else if (current_phase == PHASE_TO_HOME) {
@@ -502,13 +497,6 @@ int main() {
                             current_phase = PHASE_IDLE;
                             aktivt_beslut = 's';
                             printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
-                            
-                            // Send a final stop command
-                            unsigned char stop_packet[PACKET_SIZE] = {
-                                0x05, current_auto_state, 0x00, 's', 
-                                line_var, gyro1, gyro2, 0xFF
-                            };
-                            write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         }
                     }
                     else {
@@ -526,7 +514,7 @@ int main() {
                 unsigned char auto_packet[PACKET_SIZE] = {
                     0x05, 
                     current_auto_state, 
-                    (current_phase == PHASE_PICKUP) ? 0x01 : 0x00, // Arm or Wheel
+                    (current_phase == PHASE_PICKUP && aktivt_beslut == 'v') ? 0x01 : 0x00, // Arm or Wheel
                     aktivt_beslut, 
                     line_var,  // Inject calculated line sensor
                     gyro1,     // Inject direct gyro 1
