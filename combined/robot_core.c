@@ -341,6 +341,11 @@ int main() {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
+    
+    // TILLÄGG: Tillåt återanvändning av adress/port direkt så vi slipper "Bind failed"-felet
+    int opt = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
     memset(&servaddr, 0, sizeof(servaddr)); // Ladda pekaren med nollor
     servaddr.sin_family = AF_INET; // IPV4 eller IPV6
     servaddr.sin_addr.s_addr = INADDR_ANY; // Tar in IP-adressen för persondatorn
@@ -471,10 +476,15 @@ int main() {
                 }
             } 
             else {
-                // NORMAL KÖRNING: Vi väntar på flaggan 'flags_ny_korsning' från sensorn
+                // NORMAL KÖRNING: Vi väntar på flaggan 'flags_korsning' från sensorn
                 // flags_korsning == 2 betyder FEATURE_INTERSECTION, pickup (1) ska ej räkna upp index
-                if (flags_korsning == 2) { //tog bort flags_ny_korsning då dne ej fungerade
+                
+                static uint8_t korsning_aktiv = 0; // Håller koll på om vi redan befinner oss på en korsning
+                
+                if (flags_korsning == 2 && !korsning_aktiv) {
+                    korsning_aktiv = 1;    // Vi är på korsningen, sätt flaggan så vi inte triggar igen
                     flags_ny_korsning = 0; // Konsumera flaggan så att den inte triggar igen nästa loopvarv
+                    
                     // Index uppdateras BARA HÄR – en gång per korsning
                     current_action_index++;
                     aktivt_beslut_fn(current_action_index); // Läs nästa beslut ur arrayen
@@ -518,6 +528,9 @@ int main() {
                         aktivt_beslut = 'f';
                         log_next_action = true;
                     }
+                } 
+                else if (flags_korsning != 2) {
+                    korsning_aktiv = 0; // Vi har rullat av korsningen, redo för nästa!
                 }
             }
 
