@@ -56,6 +56,7 @@ bool log_next_action = false; // Har med logg att göra
 bool is_rotating = false;
 bool is_picking_up = false;
 time_t action_timer_start = 0; // Timer för att ersätta styrmodulens svarsignal
+uint8_t korsning_aktiv = 0; // Håller koll på om vi är mitt i en korsning (Global för att kunna nollställas)
 
 // --- TELEMETRY GLOBALS FÖR GUI ---
 bool gui_known = false; // Har GUI:t hört av sig än?
@@ -272,6 +273,7 @@ void start_autonomous_sequence(unsigned char state) {
     current_auto_state = state; // Kan vara (auto, auto) eller (auto, manuell)
     current_phase = PHASE_TO_ITEM; // Kör mot varan
     current_action_index = 0; // Var i beslutslistan vi är
+    korsning_aktiv = 0; // Nollställ korsningslås för ren start
     
     loop_counter = 0; // Endast vid simulering
     aktivt_beslut_fn(current_action_index); // Läs första beslutet ur arrayen
@@ -423,6 +425,9 @@ int main() {
                     current_phase = PHASE_IDLE;
                     is_rotating = false;
                     is_picking_up = false;
+                    current_action_index = 0; // Nollställ index
+                    korsning_aktiv = 0;       // Nollställ korsningslås
+                    aktivt_beslut = 's';      // Stanna roboten (internt)
                 }
                 
                 // Inject Sensor Data before forwarding!
@@ -478,9 +483,6 @@ int main() {
             else {
                 // NORMAL KÖRNING: Vi väntar på flaggan 'flags_korsning' från sensorn
                 // flags_korsning == 2 betyder FEATURE_INTERSECTION, pickup (1) ska ej räkna upp index
-                
-                static uint8_t korsning_aktiv = 0; // Håller koll på om vi redan befinner oss på en korsning
-                
                 if (flags_korsning == 2 && !korsning_aktiv) {
                     korsning_aktiv = 1;    // Vi är på korsningen, sätt flaggan så vi inte triggar igen
                     flags_ny_korsning = 0; // Konsumera flaggan så att den inte triggar igen nästa loopvarv
@@ -505,6 +507,7 @@ int main() {
                     else if (nasta_beslut == 'X') {
                         if (current_phase == PHASE_TO_ITEM) {
                             // Vi är framme vid varan, stanna först
+                            current_phase = PHASE_PICKUP; // NYTT: Uppdatera fasen för att aktivera arm-logiken!
                             aktivt_beslut = 's';
                             is_picking_up = true;
                             printf("\n-> PHASE CHANGE: Stopping before pickup...\n");
