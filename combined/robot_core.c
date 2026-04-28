@@ -278,11 +278,11 @@ void start_autonomous_sequence(unsigned char state) {
     
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
         is_rotating = true;
-        action_timer_start = time(NULL); // Starta klockan
     } else {
         aktivt_beslut = 'f';
     }
 
+    action_timer_start = time(NULL); // Starta klockan för sekvensen
     log_next_action = true; // Har med logg att göra
     
     printf("-> Route Calculated. Driving to item...\n");
@@ -304,8 +304,6 @@ int main() {
     uint8_t gyro2 = 0;
     
     uint8_t flags = 0;
-    uint8_t flags_korsning = 0;
-    uint8_t flags_ny_korsning = 0;
 
     init_karta(); // Initierar kartan
 
@@ -374,10 +372,9 @@ int main() {
             angle = sensor_packet[2];
             gyro1 = sensor_packet[6];
             gyro2 = sensor_packet[7];
-
-            // RÄTTAT: Använd bitvis OCH (&) istället för logiskt OCH (&&)
-            flags_korsning = (flags & 12);
-            flags_ny_korsning = (flags & 32);
+            
+            // Sensordatans flaggor (som korsning) styr inte längre logiken, 
+            // men vi läser in dem så de kan vidarebefordras till GUI och motorer!
         }
 
         // -------------------------------------------------------------
@@ -431,21 +428,22 @@ int main() {
         }
 
         // -------------------------------------------------------------
-        // 3. AUTONOMOUS STATE MACHINE 
+        // 3. AUTONOMOUS STATE MACHINE (PURELY TIMER-BASED, IGNORING SENSORS)
         // -------------------------------------------------------------
         if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
-
-            if (is_rotating) {
-                // Vi använder en timer för att simulera en "sleep" utan att blockera "blasting"
-                if (time(NULL) - action_timer_start >= 2) { // 2 sekunder för rotation
+            
+            // Varje steg i logiken sker oberoende av sensorer, enbart baserat på att 5 sekunder gått
+            if (time(NULL) - action_timer_start >= 5) {
+                
+                if (is_rotating) {
+                    // Efter 5 sekunders rotation går vi framåt igen
                     is_rotating = false;
                     aktivt_beslut = 'f';
                     log_next_action = true;
-                }
-            } else if (is_picking_up) {
-                // Vi använder samma timer-koncept för armen
-                if (time(NULL) - action_timer_start >= 3) { // 3 sekunder för plock
-                    // Dessa fasbyten sker *efter* att plocket är utfört
+                    action_timer_start = time(NULL); // Nollställ timer
+                } 
+                else if (is_picking_up) {
+                    // Efter 5 sekunders plock är varan upphämtad, vi åker hem
                     is_picking_up = false;
                     current_phase = PHASE_TO_HOME;
                     current_action_index = 0;
@@ -453,118 +451,101 @@ int main() {
                     
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
                         is_rotating = true;
-                        action_timer_start = time(NULL); // Starta klockan igen för rotation
                     } else {
                         aktivt_beslut = 'f';
                     }
                     printf("\n-> PHASE CHANGE: Heading Home...\n");
                     log_next_action = true;
-                }
-            } else {
-
-                if (flags_ny_korsning) {
+                    action_timer_start = time(NULL); // Nollställ timer
+                } 
+                else {
+                    // Vi körde framåt i 5 sekunder, detta räknas som att vi "nått nästa korsning"
                     current_action_index++;
                     aktivt_beslut_fn(current_action_index);
 
-                    if (flags_korsning == 2) { // Korsning
-
-                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                            // 1. Skicka stopp_packet till styr
+                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                        // 1. Skicka stopp_packet till styr
+                        unsigned char stop_packet[PACKET_SIZE] = {
+                            0x05, current_auto_state, 0x00, 's', 
+                            line_var, gyro1, gyro2, 0xFF
+                        };
+                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
+                        
+                        // 2. Påbörja rotation
+                        is_rotating = true;
+                        log_next_action = true;
+                    }
+                    else if (aktivt_beslut == 'X') {
+                        if (current_phase == PHASE_TO_ITEM) {
+                            // Plocka upp vara (FEATURE_PICKUP)
                             unsigned char stop_packet[PACKET_SIZE] = {
                                 0x05, current_auto_state, 0x00, 's', 
                                 line_var, gyro1, gyro2, 0xFF
                             };
                             write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                            // Loggas när decision ändras
-                            
-                            // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om stopp är klart kan vi fortsätta.
 
-                            // 2. Påbörja rotation
-                            is_rotating = true;
-                            action_timer_start = time(NULL); // Starta klockan
+                            current_phase = PHASE_PICKUP;
+                            aktivt_beslut = 'v';
+                            is_picking_up = true;
                             
-                            // 3. Vänta tills rotationen är klar. 
-                            // OBS: usleep blockerar hela main-loopen. I ett skarpt system 
-                            // är det bättre att vänta in en specifik vinkel från gyrot!
-                            // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om rotation är klart kan vi fortsätta.
-
-                        } else {
-                            aktivt_beslut = 'f';
+                            // Säg till styrmodulen att använda armen ('v' som action)
+                            unsigned char arm_packet[PACKET_SIZE] = {
+                                0x05, current_auto_state, 0x01, 'v', 
+                                line_var, gyro1, gyro2, 0xFF
+                            };
+                            write(i2c_styr_fd, arm_packet, PACKET_SIZE);
+                            
+                            printf("\n-> PHASE CHANGE: Picking up item...\n");
+                            log_next_action = true;
+                        }
+                        else if (current_phase == PHASE_TO_HOME) {
+                            // Hemma!
+                            current_phase = PHASE_IDLE;
+                            aktivt_beslut = 's';
+                            printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
+                            
+                            // Send a final stop command
+                            unsigned char stop_packet[PACKET_SIZE] = {
+                                0x05, current_auto_state, 0x00, 's', 
+                                line_var, gyro1, gyro2, 0xFF
+                            };
+                            write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         }
                     }
-                    // TILLAGT: Kolla att vi faktiskt är på väg till varan så den inte plockar upp den hemma
-                    else if ((flags_korsning == 1) && (aktivt_beslut == 'X') && (current_phase == PHASE_TO_ITEM)) {
-                        // Plocka upp vara (FEATURE_PICKUP)
-                        unsigned char stop_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 's', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-
-                        current_phase = PHASE_PICKUP;
-                        aktivt_beslut = 'v';
-                        is_picking_up = true;
-                        action_timer_start = time(NULL); // Starta klockan
-                        
-                        // Säg till styrmodulen att använda armen ('v' som action)
-                        unsigned char arm_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x01, 'v', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, arm_packet, PACKET_SIZE);
-                        
-                        // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om armen är klar kan vi fortsätta.
-
-                        printf("\n-> PHASE CHANGE: Picking up item...\n");
+                    else {
+                        // Bara att fortsätta framåt till nästa korsning
+                        aktivt_beslut = 'f';
+                        log_next_action = true;
                     }
-                    
-                    log_next_action = true; 
-
-                    // Dessa fasbyten sker *efter* att plocket är utfört
-                    if (current_phase == PHASE_TO_HOME && aktivt_beslut == 'X') {
-                        current_phase = PHASE_IDLE;
-                        aktivt_beslut = 's';
-                        printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
-                        
-                        // Send a final stop command
-                        unsigned char stop_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 's', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                    }
-
-                    loop_counter = 0;
+                    action_timer_start = time(NULL); // Nollställ timer
                 }
-            } // Stänger else (!is_rotating && !is_picking_up)
+            }
 
             // BLAST THE CURRENT ACTION CONTINUOUSLY
-            if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
-                blasting_counter++;
-                if (blasting_counter >= 50) { // Skickar var 100:e millisekund (10 Hz)
-                    
-                    unsigned char auto_packet[PACKET_SIZE] = {
-                        0x05, 
-                        current_auto_state, 
-                        (current_phase == PHASE_PICKUP) ? 0x01 : 0x00, // Arm or Wheel
-                        aktivt_beslut, 
-                        line_var,  // Inject calculated line sensor
-                        gyro1,     // Inject direct gyro 1
-                        gyro2,     // Inject direct gyro 2
-                        0xFF
-                    };
+            blasting_counter++;
+            if (blasting_counter >= 50) { // Skickar var 100:e millisekund (10 Hz)
+                
+                unsigned char auto_packet[PACKET_SIZE] = {
+                    0x05, 
+                    current_auto_state, 
+                    (current_phase == PHASE_PICKUP) ? 0x01 : 0x00, // Arm or Wheel
+                    aktivt_beslut, 
+                    line_var,  // Inject calculated line sensor
+                    gyro1,     // Inject direct gyro 1
+                    gyro2,     // Inject direct gyro 2
+                    0xFF
+                };
 
-                    // SEND TO MICROCONTROLLER EVERY 100ms
-                    write(i2c_styr_fd, auto_packet, PACKET_SIZE);
-                    
-                    if (log_next_action) {
-                        log_verification(auto_packet, auto_packet[3]);
-                        printf("Action updated to: '%c'\n", auto_packet[3]);
-                        log_next_action = false;
-                    }
-                    
-                    blasting_counter = 0;
+                // SEND TO MICROCONTROLLER EVERY 100ms
+                write(i2c_styr_fd, auto_packet, PACKET_SIZE);
+                
+                if (log_next_action) {
+                    log_verification(auto_packet, auto_packet[3]);
+                    printf("Action updated to: '%c'\n", auto_packet[3]);
+                    log_next_action = false;
                 }
+                
+                blasting_counter = 0;
             }
         }
 

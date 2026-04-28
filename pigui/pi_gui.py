@@ -1,600 +1,272 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
-#include <sys/time.h>
-#include <linux/i2c-dev.h>
-#include <errno.h>
-#include <time.h>
-#include <stdint.h> // Required for int16_t and uint8_t
+import sys
+import cv2
+import numpy as np
+import socket
+import struct
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                             QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame)
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtGui import QImage, QPixmap
+import os
 
-// --- ALGORITHM DEFINITIONS ---
-#define NODES 26 // 5x5 samt en start/slutnod
-#define START 25 // Start/slut på nod 25
-#define NONE -1 // Betyder att det inte finns en föregående nod
-#define STOP -1 // Stoppvillkor för ruttarray
+# Force low-latency FFmpeg flags
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "fflags;nobuffer|flags;low_delay|probesize;32|analyzeduration;0"
 
-// --- TELEMETRY DEFINITIONS ---
-#define UDP_PORT 5001 // Porten som används för kommunikation med persondatorn
-#define BUFFER_SIZE 1024 // Storleken på bufferten
-#define I2C_DEVICE "/dev/i2c-1" // Filnamn för i2c-bussen
-#define STYRKOMM_ADDR 0x12
-#define SENSOR_ADDR 0x10
-#define PACKET_SIZE 8 // Paketstorleken för kommunikationen inom systemet (i2c)
-#define VERIFY_LOG_FILE "verifikation_keys.txt" // Loggfil
+class VideoThread(QThread):
+    change_pixmap_signal = pyqtSignal(np.ndarray)
 
-// --- ALGORITHM GLOBALS ---
-char nodriktningsmatris[NODES][NODES]; // Väderstreck för vägarna (ex från (5) till (6) är östlig riktning 'e')
-int  vag[NODES][NODES]; // Huruvida vägen är aktiv/finns (ex väg mellan (0) och (20) finns ej och är 0)
-int  rutt_till_vara[NODES]; // Array med vägen (nodnummer) till varan
-int  rutt_hem[NODES]; // Array med vägen (nodnummer) från varan till slut
-char beslut_till_vara[NODES]; // Array med tecken (action) vid varje korsning
-char beslut_hem[NODES]; // Array med tecken (ACTION) vid varje korning hem
-int  vara_u, vara_v; // u och v är noder och varan ligger mellan dem och bestäms av input från persondatorn
-
-// --- STATE MACHINE GLOBALS ---
-// Definierar datatypen 'autophase' som bara kan ta fyra värden
-// Används till att bestämma vad roboten håller på med just nu
-typedef enum {
-    PHASE_IDLE = 0,
-    PHASE_TO_ITEM,
-    PHASE_PICKUP,
-    PHASE_TO_HOME
-} AutoPhase;
-
-AutoPhase current_phase = PHASE_IDLE; // I början står roboten still
-int current_action_index = 0; // Index för att hämta aktuellt belut. Räknas upp när vi når korsning.
-unsigned char current_auto_state = 1; // Bestämmer STATE (auto, auto), (manuell, auto) osv
-bool log_next_action = false; // Har med logg att göra
-
-// Nya variabler för den icke-blockerande "blasting"-logiken
-bool is_rotating = false;
-bool is_picking_up = false;
-time_t action_timer_start = 0; // Timer för att ersätta styrmodulens svarsignal
-int blasting_counter = 0; // Räknare för att lugna ned skickandet till motorerna
-
-// --- TELEMETRY GLOBALS FÖR GUI ---
-bool gui_known = false; // Har GUI:t hört av sig än?
-int telemetry_counter = 0; // Räknare för att inte spamma nätverket
-
-// --- LOOP TIMING GLOBALS ---
-char aktivt_beslut = 's'; // Börjar med 's' (stå stilla)
-int  loop_counter = 0; // Räknar upp loopen för att se när nästa beslut ska skickas (just nu bara test)
-
-// =================================================================
-// 1. KARTA, HJÄLPFUNKTIONER & RUTTPLANERING
-// =================================================================
-void init_karta() {
-    memset(vag, 0, sizeof(vag)); // Sätter alla vägar inaktiva
-    memset(nodriktningsmatris, ' ', sizeof(nodriktningsmatris)); // Sätter alla väderstreck till blankkaraktärer
-
-    // Loopar igenom alla noder
-    for (int i = 0; i < 25; i++) {
-        int rad = i / 5; // Räknar ut vilken rad noden är på genom att avrunda aktuell nod / antal kolonner nedåt
-        int kol = i % 5; // Räkanr ut vilken kolonn noden är på genom att ta resten av aktuell nod / antal rader 
-        if (kol < 4) { vag[i][i+1] = 1; nodriktningsmatris[i][i+1] = 'e'; } // Noder på kolonn 0-3 har alltid en nod österut 'e' som är nästa nodnummer
-        if (kol > 0) { vag[i][i-1] = 1; nodriktningsmatris[i][i-1] = 'w'; } // Noder på kolonn 1-4 har alltid en nod västerut 'w' som är föregående nodnummer
-        if (rad < 4) { vag[i][i+5] = 1; nodriktningsmatris[i][i+5] = 's'; } // Noder på rad 0-3 har alltid en nod söderut 's' som är 5 nodnummer framåt
-        if (rad > 0) { vag[i][i-5] = 1; nodriktningsmatris[i][i-5] = 'n'; } // Noder på rad 1-4 har alltid en nod norrut 'n' som är 5 nodnummer bakåt
-    }
-
-    vag[START][0] = 1; // Aktivera vägen mellan startnod och nod 0 
-    vag[0][START] = 1; // Aktivera vägen mellan nod 0 och startnod (symmetrisk matris)
-    nodriktningsmatris[START][0] = 's'; // Förutsätter att start -> 0 är söderut
-    nodriktningsmatris[0][START] = 'n'; // Förutsäter att 0 -> start är norrut
-}
-
-// Funktion som avgör svängriktning genom att jämföra väderstreck
-char get_turn(char nu, char nasta) {
-    if (nu == nasta) return 'f';
-    if (nu == 'n' && nasta == 'e') return 'e'; // Rotation medsols
-    if (nu == 'e' && nasta == 's') return 'e';
-    if (nu == 's' && nasta == 'w') return 'e';
-    if (nu == 'w' && nasta == 'n') return 'e';
-    if (nu == 'n' && nasta == 'w') return 'o'; // Rotation motsols
-    if (nu == 'w' && nasta == 's') return 'o';
-    if (nu == 's' && nasta == 'e') return 'o';
-    if (nu == 'e' && nasta == 'n') return 'o';
-    return 'u'; // Rotation 180 grader
-}
-
-// Funktion som anger motsatt riktning
-char get_motsatt_dir(char nu) {
-    if (nu == 's') return 'n';
-    if (nu == 'n') return 's';
-    if (nu == 'e') return 'w';
-    if (nu == 'w') return 'e';
-    return nu; 
-}
-
-// Funktion som tar in en rutt och robotens startriktning och uppdaterar beslutsarrayen
-void bygg_beslut(int rutt[], char start_dir, char beslut[]) {
-    char dir = start_dir; // Hjälpvariabel
-    int i = 0; // Index
-
-    // Loopa till dess att det inte finns något mer i rutten
-    while (rutt[i + 1] != STOP) {
-        char nasta_dir = nodriktningsmatris[rutt[i]][rutt[i + 1]]; // Kollar vilken väderstreck noden har jämfört med nästa nod i rutten
-        beslut[i] = get_turn(dir, nasta_dir); // Jämför väderstreck med nästa väderstreck för att beräkna riktning och lagra i beslutet
-        dir = nasta_dir;
-        i++;
-    }
-    beslut[i] = 'X'; // Sista beslutet är 'X' som betyder hämta/lämna varan
-    beslut[i+1] = '\0'; // Avslutar array
-}
-
-// Funktion som beräknar rutten genom BFS + kostnad för svängar
-int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
-    int kostnad[NODES]; // Varje nod har en kostnad för att ta sig dit
-    int foregaende[NODES]; // Varje nod har en föregående för att hålla koll på snabbaste vägen
-    char riktning_in[NODES]; // n, s, e, w
-    bool besokt[NODES] = {false}; // Huruvida noden är besökt eller ej
-
-    for (int i = 0; i < NODES; i++) { // Sätt alla nodkostnader i början till oo
-        kostnad[i] = 9999;
-        foregaende[i] = NONE;
-        rutt[i] = STOP;
-    }
-
-    kostnad[start] = 0; // Ingen kostnad för startnoden
-    riktning_in[start] = start_dir; // Väderstreck in till startnod (robotens aktuella position)
-
-    for (int i = 0; i < NODES; i++) { // Antal iterationer är mindre än antal noder
-        int u = -1; // u är aktuell nod som besöks i iterationen
-        for (int j = 0; j < NODES; j++) {
-            if (!besokt[j] && (u == -1 || kostnad[j] < kostnad[u])) u = j; // Hittar billigaste ej besökta nod och tilldelar u
-        }
-        if (kostnad[u] == 9999 || u == mal) break; // Antingen om ingen väg finns eller målnod funnen, breaka
-        besokt[u] = true; // Annars börjar vi besöka nod u
-
-        // Försöker hitta närliggande obesökta noder
-        for (int v = 0; v < NODES; v++) {
-            if (vag[u][v] && !besokt[v]) { // Om vägen finns och ej är besökt...
-                char nasta_dir = nodriktningsmatris[u][v]; // 1. Hitta väderstreck till noden v
-                int straff = (riktning_in[u] != nasta_dir) ? 1 : 0; // 2. Straffa med 1 om väderstrecken mellan u och v skiljer sig (pga rotation)
-                int ny_kostnad = kostnad[u] + 100 + straff; // 3. Beräkna kostnaden för v  
-                if (ny_kostnad < kostnad[v]) { // Om ny kostnad < befintlig kostnad för nod v uppdateras v, föregående för v samt billigaste riktningen in i v
-                    kostnad[v] = ny_kostnad;
-                    foregaende[v] = u;
-                    riktning_in[v] = nasta_dir;
-                }
-            }
-        }
-    }
-
-    // Funktion som beräknar rutten baklänges 
-    int temp[NODES], c = 0, nu = mal;
-    while (nu != NONE) {
-        temp[c++] = nu;
-        nu = foregaende[nu];
-    }
-
-    // Hjälpfunktion för att sortera om rutten så att den blir i rätt ordning
-    for (int i = 0; i < c; i++) rutt[i] = temp[c - 1 - i];
-    return kostnad[mal];
-}
-
-// Beräknar beslut till vara och beslut hem oavsett var roboten befinner sig i kartan
-void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) { // Tar in vilken nod vi är på och i vilket väderstreck roboten är vänd mot
-    int rutt_alt1[NODES], rutt_alt2[NODES]; // Temporära variabler för rutt
-
-    // Vilken av de närliggande noderna till varan ska vi köra in genom för att det ska bli billigast? 
-    int kostnad1 = hitta_rutt(nuvarande_nod, vara_u, rutt_alt1, nuvarande_dir);
-    int kostnad2 = hitta_rutt(nuvarande_nod, vara_v, rutt_alt2, nuvarande_dir);
-    
-    int ingang, utgang;
-    if (kostnad1 <= kostnad2) {
-        ingang = vara_u; utgang = vara_v; // Om kostnad1 <= kostnad2 blir ingången via u och utgången via v
-        memcpy(rutt_till_vara, rutt_alt1, sizeof(rutt_alt1)); // rutt_till_vara tilldelas rutt_alt1 med storlek rutt_alt1
-    } else {
-        ingang = vara_v; utgang = vara_u; // Tvärtom
-        memcpy(rutt_till_vara, rutt_alt2, sizeof(rutt_alt2));
-    }
-
-    // Roboten måste åka mellan målnoderna och därför sätter vi utgångsnoden till sista noden, men ej säkert att den åker genom/till den
-    int i = 0;
-    while (rutt_till_vara[i] != STOP) i++;
-    rutt_till_vara[i] = utgang;
-    rutt_till_vara[i+1] = STOP;
-
-    bygg_beslut(rutt_till_vara, nuvarande_dir, beslut_till_vara); // Omvandla till beslut
-    
-    char dir_vid_vara = nodriktningsmatris[ingang][utgang]; // Beräknar vilket väderstreck roboten har när den hämtat varan 
-    int cost_utgang = hitta_rutt(utgang, START, rutt_alt1, dir_vid_vara);
-    int cost_ingang = hitta_rutt(ingang, START, rutt_alt2, dir_vid_vara) + 100; 
-
-    // Bestämmer huruvida roboten ska köra vidare till nästa nod eller vända och köra tillbaka (straff 100) efter att ha hämtat varan
-    if (cost_utgang <= cost_ingang) {
-        memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
-        bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
-    } else {
-        memcpy(rutt_hem, rutt_alt2, sizeof(rutt_alt2));
-        char dir_efter_vanding = get_motsatt_dir(dir_vid_vara);
-        bygg_beslut(rutt_hem, dir_efter_vanding, beslut_hem);
-        int len = strlen(beslut_hem) + 1;
-        memmove(&beslut_hem[1], &beslut_hem[0], len);
-        beslut_hem[0] = 'u'; 
-    }
-}
-
-// =================================================================
-// 2. I2C, TELEMETRY & AUTO-INIT FUNKTIONER
-// =================================================================
-
-// Initierar verifikationsfilen för utgående data
-void log_verification(const unsigned char *sent, char action) {
-    FILE *f = fopen(VERIFY_LOG_FILE, "a");
-    if (f == NULL) return;
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    fprintf(f, "[%02d:%02d:%02d] ACTION '%c'\nSKICKAT (0x12): ", t->tm_hour, t->tm_min, t->tm_sec, action);
-    for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", sent[i]);
-    fprintf(f, "\n\n");
-    fclose(f);
-}
-
-// Loggar sensordata i samma verifikationsfil
-void log_sensor_data(const unsigned char *received) {
-    FILE *f = fopen(VERIFY_LOG_FILE, "a");
-    if (f == NULL) return;
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    fprintf(f, "[%02d:%02d:%02d] SENSOR LÄST (0x10): ", t->tm_hour, t->tm_min, t->tm_sec);
-    for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", received[i]);
-    fprintf(f, "\n\n");
-    fclose(f);
-}
-
-// Uppdaterar beslutet till styrmodulen (kolla vidare på denna)
-void aktivt_beslut_fn(int index) {
-    if (current_phase == PHASE_TO_ITEM) {
-        aktivt_beslut = beslut_till_vara[index];
-    } else if (current_phase == PHASE_PICKUP) {
-        aktivt_beslut = 'v'; // Arm pickup action OBS behöver uppdateras med faktiska beslut
-    } else if (current_phase == PHASE_TO_HOME) {
-        aktivt_beslut = beslut_hem[index];
-    }
-}
-
-// Här sätts var varan ligger någonstans, behöver uppdateras och integreras med guin
-void start_autonomous_sequence(unsigned char state) {
-    vara_u = 10; 
-    vara_v = 11; 
-    
-    printf("\n=== CALCULATING AUTONOMOUS ROUTE ===\n");
-    planera_hela_resan(START, 's'); // Vi är pån startnoden och roboten är PRELIMINÄRT riktad söderut
-    
-    current_auto_state = state; // Kan vara (auto, auto) eller (auto, manuell)
-    current_phase = PHASE_TO_ITEM; // Kör mot varan
-    current_action_index = 0; // Var i beslutslistan vi är
-    
-    loop_counter = 0; // Endast vid simulering
-    aktivt_beslut_fn(current_action_index); // Vilket beslut tar vi just nu
-    
-    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-        is_rotating = true;
-        action_timer_start = time(NULL); // Starta klockan
-    } else {
-        aktivt_beslut = 'f';
-    }
-
-    log_next_action = true; // Har med logg att göra
-    
-    printf("-> Route Calculated. Driving to item...\n");
-}
-
-// =================================================================
-// 3. HUVUDPROGRAM
-// =================================================================
-int main() {
-    int sockfd, i2c_styr_fd, i2c_sens_fd; // Deklarera filbeskrivningsnummer, används till R/WR
-    struct sockaddr_in servaddr, cliaddr; // Deklarera familj (IPV4 eller IPV6), portnummer och IP-adress
-    unsigned char buffer[BUFFER_SIZE]; // Deklarera storlek på buffer
-    socklen_t len = sizeof(cliaddr); 
-
-    // Placeholders till sensorvärdena
-    uint8_t line_var = 0;
-    uint8_t angle = 0;
-    uint8_t gyro1 = 0;
-    uint8_t gyro2 = 0;
-    
-    uint8_t flags = 0;
-    uint8_t flags_korsning = 0;
-    uint8_t flags_ny_korsning = 0;
-
-    init_karta(); // Initierar kartan
-
-    FILE *clr = fopen(VERIFY_LOG_FILE, "w");
-    if (clr) fclose(clr);
-    printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
-
-    // SETUP I2C - STYRKOMM (0x12)
-    i2c_styr_fd = open(I2C_DEVICE, O_RDWR); // Öppnar fil till styrmodulen som ger filbeskrivningsnummer som kan läsas och skrivas till
-    if (i2c_styr_fd >= 0) { // Om filen är gick att öppna...
-        ioctl(i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); // Tilldela egenskaper till filen (slav, adress)
-        if (write(i2c_styr_fd, NULL, 0) < 0) { // Om det inte går att fysiskt skriva till adressen...
-            printf("[WARNING] Motor Controller (0x12) missing. Running in Sim Mode.\n"); // kör i simulerat läge
-        } else {
-            printf("Connected to Motor Controller (0x12)\n"); // Annars, kör som tänkt
-        }
-    }
-
-    // SETUP I2C - SENSOR (0x10)
-    i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
-    if (i2c_sens_fd >= 0) {
-        ioctl(i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
-        if (write(i2c_sens_fd, NULL, 0) < 0) {
-            printf("[WARNING] Sensor Board (0x10) missing. Will send zeros.\n");
-        } else {
-            printf("Connected to Sensor Board (0x10)\n");
-        }
-    }
-
-    // SETUP UDP
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { // Skapar socket för att kunna kommunicera med persondatorn
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-    memset(&servaddr, 0, sizeof(servaddr)); // Ladda pekaren med nollor
-    servaddr.sin_family = AF_INET; // IPV4 eller IPV6
-    servaddr.sin_addr.s_addr = INADDR_ANY; // Tar in IP-adressen för persondatorn
-    servaddr.sin_port = htons(UDP_PORT); // Sätter porten att kommunicera via
-
-    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) { // Binder socket till IP-adressen
-        perror("Bind failed");
-        exit(EXIT_FAILURE);
-    }
-    printf("Listening for UDP on port %d...\n\n", UDP_PORT);
-
-    // NON-BLOCKING MAIN LOOP
-    while (1) {
-        // -------------------------------------------------------------
-        // 1. READ FROM SENSOR (0x10)
-        // -------------------------------------------------------------
-        unsigned char sensor_packet[PACKET_SIZE];
-        if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { // Om filen är öppen och PACKET_SIZE == 8... (read läser även in sensorpaketet)
-           
-            // Logga endast när datan från sensorn faktiskt ändras (för att inte spamma sönder filen)
-            static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
-            if (memcmp(sensor_packet, last_sensor_packet, PACKET_SIZE) != 0) {
-                log_sensor_data(sensor_packet);
-                memcpy(last_sensor_packet, sensor_packet, PACKET_SIZE);
-            }
-            
-           // int16_t val1 = (int16_t)((sensor_packet[2] << 8) | sensor_packet[1]); //Fabian nils och adam bytte till little endian 1 till 2
-           // int16_t val2 = (int16_t)((sensor_packet[3] << 8) | sensor_packet[4]);
-            
-            flags = sensor_packet[0];
-            line_var = sensor_packet[1];
-            angle = sensor_packet[2];
-            gyro1 = sensor_packet[6];
-            gyro2 = sensor_packet[7];
-
-            flags_korsning = (flags && 12);
-            flags_ny_korsning = (flags && 32);
-        }
-
-        // -------------------------------------------------------------
-        // 2. CHECK FOR NETWORK PACKETS (INSTANTLY)
-        // -------------------------------------------------------------
-
-        // Läs in från persondatorn
-        int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
+    def run(self):
+        # Connect to the Pi's UDP stream
+        cap = cv2.VideoCapture("udp://0.0.0.0:5000", cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
-        if (n > 0) {
-            gui_known = true; // Vi har fått ett paket, nu vet vi GUI:ts IP och port!
-        }
+        while True:
+            ret, frame = cap.read()
+            if ret:
+                self.change_pixmap_signal.emit(frame)
 
-        if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
-            unsigned char state = buffer[1];
-            unsigned char target = buffer[2];
-            char action = (char)buffer[3];
+# --- NEW: Telemetry Listener Thread ---
+class TelemetryThread(QThread):
+    telemetry_signal = pyqtSignal(dict)
 
-            if (state == 0x00 || state == 0x01) {
-                // Start Auto Mode if 'f' is pressed
-                if (action == 'f' && current_phase == PHASE_IDLE) {
-                    start_autonomous_sequence(state);
-                } else if (current_phase != PHASE_IDLE) {
-                    // Inject Sensor Data before forwarding!
-                    buffer[4] = line_var;
-                    buffer[5] = gyro1;
-                    buffer[6] = gyro2;
+    def __init__(self, sock):
+        super().__init__()
+        self.sock = sock
+        self.running = True
 
-                    write(i2c_styr_fd, buffer, PACKET_SIZE);
-                    log_verification(buffer, action);
-                    printf("-> Manual Command Forwarded: '%c'\n", action);
-                }
-            } else if (state == 0x02 || state == 0x03) {
-                // MANUAL OVERRIDE
-                if (current_phase != PHASE_IDLE) {
-                    printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
-                    current_phase = PHASE_IDLE;
-                    is_rotating = false;
-                    is_picking_up = false;
-                }
-                
-                // Inject Sensor Data before forwarding!
-                buffer[4] = line_var;
-                buffer[5] = gyro1;
-                buffer[6] = gyro2;
-
-                write(i2c_styr_fd, buffer, PACKET_SIZE);
-                log_verification(buffer, action);
-                printf("-> Manual Command Forwarded: '%c'\n", action);
-            }
-        }
-
-        // -------------------------------------------------------------
-        // 3. AUTONOMOUS STATE MACHINE 
-        // -------------------------------------------------------------
-        if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
-
-            if (is_rotating) {
-                // Vi använder en timer för att simulera en "sleep" utan att blockera "blasting"
-                if (time(NULL) - action_timer_start >= 2) { // 2 sekunder för rotation
-                    is_rotating = false;
-                    aktivt_beslut = 'f';
-                    log_next_action = true;
-                }
-            } else if (is_picking_up) {
-                // Vi använder samma timer-koncept för armen
-                if (time(NULL) - action_timer_start >= 3) { // 3 sekunder för plock
-                    // Dessa fasbyten sker *efter* att plocket är utfört
-                    is_picking_up = false;
-                    current_phase = PHASE_TO_HOME;
-                    current_action_index = 0;
-                    aktivt_beslut_fn(current_action_index);
-                    
-                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                        is_rotating = true;
-                        action_timer_start = time(NULL); // Starta klockan igen för rotation
-                    } else {
-                        aktivt_beslut = 'f';
-                    }
-                    printf("\n-> PHASE CHANGE: Heading Home...\n");
-                    log_next_action = true;
-                }
-            } else {
-
-                if (flags_ny_korsning) {
-                    current_action_index++;
-                    aktivt_beslut_fn(current_action_index);
-
-                    if (flags_korsning == 2) { // Korsning
-
-                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                            // 1. Skicka stopp_packet till styr
-                            unsigned char stop_packet[PACKET_SIZE] = {
-                                0x05, current_auto_state, 0x00, 's', 
-                                line_var, gyro1, gyro2, 0xFF
-                            };
-                            write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                            // Loggas när decision ändras
-                            
-                            // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om stopp är klart kan vi fortsätta.
-
-                            // 2. Påbörja rotation
-                            is_rotating = true;
-                            action_timer_start = time(NULL); // Starta klockan
-                            
-                            // 3. Vänta tills rotationen är klar. 
-                            // OBS: usleep blockerar hela main-loopen. I ett skarpt system 
-                            // är det bättre att vänta in en specifik vinkel från gyrot!
-                            // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om rotation är klart kan vi fortsätta.
-
-                        } else {
-                            aktivt_beslut = 'f';
-                        }
-                    }
-                    else if ((flags_korsning == 1) && (aktivt_beslut == 'X')) {
-                        // Plocka upp vara (FEATURE_PICKUP)
-                        unsigned char stop_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 's', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-
-                        current_phase = PHASE_PICKUP;
-                        aktivt_beslut = 'v';
-                        is_picking_up = true;
-                        action_timer_start = time(NULL); // Starta klockan
-                        
-                        // Säg till styrmodulen att använda armen ('v' som action)
-                        unsigned char arm_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x01, 'v', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, arm_packet, PACKET_SIZE);
-                        
-                        // Här vill vi ha en while-loop som läser in vad vi får tillbaka från styrmodulen. Om armen är klar kan vi fortsätta.
-
-                        printf("\n-> PHASE CHANGE: Picking up item...\n");
-                    }
-                    
-                    log_next_action = true; 
-
-                    // Dessa fasbyten sker *efter* att plocket är utfört
-                    if (current_phase == PHASE_TO_HOME && aktivt_beslut == 'X') {
-                        current_phase = PHASE_IDLE;
-                        aktivt_beslut = 's';
-                        printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
-                        
-                        // Send a final stop command
-                        unsigned char stop_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 's', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                    }
-
-                    loop_counter = 0;
-                }
-            } // Stänger else (!is_rotating && !is_picking_up)
-
-            // BLAST THE CURRENT ACTION CONTINUOUSLY
-            if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
-                blasting_counter++;
-                if (blasting_counter >= 50) { // Skickar var 100:e millisekund (10 Hz)
-                    
-                    unsigned char auto_packet[PACKET_SIZE] = {
-                        0x05, 
-                        current_auto_state, 
-                        (current_phase == PHASE_PICKUP) ? 0x01 : 0x00, // Arm or Wheel
-                        aktivt_beslut, 
-                        line_var,  // Inject calculated line sensor
-                        gyro1,     // Inject direct gyro 1
-                        gyro2,     // Inject direct gyro 2
-                        0xFF
-                    };
-
-                    // SEND TO MICROCONTROLLER EVERY 100ms
-                    write(i2c_styr_fd, auto_packet, PACKET_SIZE);
-                    
-                    if (log_next_action) {
-                        log_verification(auto_packet, auto_packet[3]);
-                        printf("Action updated to: '%c'\n", auto_packet[3]);
-                        log_next_action = false;
-                    }
-                    
-                    blasting_counter = 0;
-                }
-            }
-        }
-
-        // -------------------------------------------------------------
-        // 4. SKICKA TELEMETRI TILLBAKA TILL GUI
-        // -------------------------------------------------------------
-        if (gui_known) {
-            telemetry_counter++;
-            if (telemetry_counter >= 50) { // Körs var 100:e millisekund (10 Hz) vid usleep(2000)
-                unsigned char telemetry_packet[PACKET_SIZE] = {
-                    0x06,                         // 0x06 identifierar paketet som telemetri
-                    (unsigned char)current_phase, // Aktuell fas
-                    aktivt_beslut,                // Vad vi precis skickade till motorerna
-                    line_var,                     // Sensordata: Linje
-                    gyro1,                        // Sensordata: Gyro 1
-                    gyro2,                        // Sensordata: Gyro 2
-                    flags,                        // Sensordata: Flaggor
-                    0xFF                          // Footer
-                };
-                sendto(sockfd, telemetry_packet, PACKET_SIZE, 0, (struct sockaddr *)&cliaddr, len);
-                telemetry_counter = 0;
-            }
-        }
+    def run(self):
+        # Set a small timeout so the thread can gracefully exit if needed
+        self.sock.settimeout(1.0)
         
-        // -------------------------------------------------------------
-        // 5. TINY DELAY (2000 microseconds = 2 milliseconds / 500Hz)
-        // -------------------------------------------------------------
-        usleep(2000); 
-    }
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(1024)
+                # Check if it's our 8-byte telemetry packet (Starts with 0x06, Ends with 0xFF)
+                if len(data) == 8 and data[0] == 0x06 and data[7] == 0xFF:
+                    # Unpack 8 unsigned bytes
+                    unpacked = struct.unpack('8B', data)
+                    
+                    # Create a dictionary of the received data
+                    telemetry_data = {
+                        'phase': unpacked[1],
+                        'action': chr(unpacked[2]), # Convert ASCII code back to character
+                        'line_var': unpacked[3],
+                        'gyro1': unpacked[4],
+                        'gyro2': unpacked[5],
+                        'flags': unpacked[6]
+                    }
+                    self.telemetry_signal.emit(telemetry_data)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                pass # Ignore other socket errors during normal operation
 
-    close(sockfd);
-    if (i2c_styr_fd >= 0) close(i2c_styr_fd);
-    if (i2c_sens_fd >= 0) close(i2c_sens_fd);
-    return 0;
-}
+    def stop(self):
+        self.running = False
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PiCam Ground Control")
+        self.setStyleSheet("QMainWindow { background-color: #2c3e50; color: white; }")
+        
+        # Ensure the main window can capture keyboard inputs
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Main Layout
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
+
+        # Video Box
+        self.image_label = QLabel(self)
+        self.image_label.setFixedSize(640, 480)
+        self.image_label.setStyleSheet("border: 3px solid #34495e; background-color: black;")
+        self.layout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # --- TELEMETRY SETUP ---
+        self.pi_ip = "10.42.0.1" # Change to your Pi's IP if needed
+        self.pi_port = 5001
+        self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # We must bind our socket to listen for returning packets on whatever port the OS assigns
+        self.control_sock.bind(("0.0.0.0", 0)) 
+
+        # --- CONTROL PANEL ---
+        self.control_layout = QHBoxLayout()
+        self.layout.addLayout(self.control_layout)
+
+        # 1. State Selector
+        self.state_combo = QComboBox()
+        self.state_combo.setStyleSheet("background-color: white; color: black; padding: 5px; font-size: 14px;")
+        self.state_combo.addItem("1: (Auto, Auto)", 0)
+        self.state_combo.addItem("2: (Auto, Manual)", 1)
+        self.state_combo.addItem("3: (Manual, Auto)", 2)
+        self.state_combo.addItem("4: (Manual, Manual)", 3)
+        self.state_combo.setCurrentIndex(3) # Default to 3
+        # Return focus to main window after clicking so keyboard works
+        self.state_combo.currentIndexChanged.connect(lambda: self.setFocus()) 
+        self.control_layout.addWidget(QLabel("State:"))
+        self.control_layout.addWidget(self.state_combo)
+
+        # 2. Target Selector
+        self.target_combo = QComboBox()
+        self.target_combo.setStyleSheet("background-color: white; color: black; padding: 5px; font-size: 14px;")
+        self.target_combo.addItem("Wheel", "wheel")
+        self.target_combo.addItem("Arm", "arm")
+        self.target_combo.currentIndexChanged.connect(lambda: self.setFocus())
+        self.control_layout.addWidget(QLabel("Target:"))
+        self.control_layout.addWidget(self.target_combo)
+
+        # Instructions Label
+        self.inst_label = QLabel(
+            "HOTKEYS -> STATE: [1-4] | TARGET: [W]heel, [A]rm\n"
+            "WHEEL: Arrows (Move), 'S' (Stop), 'E' (CW), 'O' (CCW)  |  ARM: 'V' (Left), 'H' (Right)"
+        )
+        self.inst_label.setStyleSheet("color: #bdc3c7; font-size: 13px; font-weight: bold;")
+        self.layout.addWidget(self.inst_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # --- NEW: LIVE TELEMETRY DASHBOARD ---
+        self.dashboard_frame = QFrame()
+        self.dashboard_frame.setStyleSheet("QFrame { background-color: #34495e; border-radius: 5px; margin-top: 10px; }")
+        self.dashboard_layout = QHBoxLayout(self.dashboard_frame)
+        
+        self.lbl_phase = QLabel("Phase: IDLE")
+        self.lbl_action = QLabel("Last Action: -")
+        self.lbl_line = QLabel("Line: 0")
+        self.lbl_gyro = QLabel("Gyro: (0, 0)")
+        self.lbl_flags = QLabel("Flags: 0")
+        
+        for lbl in [self.lbl_phase, self.lbl_action, self.lbl_line, self.lbl_gyro, self.lbl_flags]:
+            lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; padding: 5px;")
+            self.dashboard_layout.addWidget(lbl)
+            
+        self.layout.addWidget(self.dashboard_frame)
+
+        # Start Video Thread
+        self.video_thread = VideoThread()
+        self.video_thread.change_pixmap_signal.connect(self.update_image)
+        self.video_thread.start()
+
+        # Start Telemetry Thread
+        self.telemetry_thread = TelemetryThread(self.control_sock)
+        self.telemetry_thread.telemetry_signal.connect(self.update_telemetry_dashboard)
+        self.telemetry_thread.start()
+
+        # Phase names mapping
+        self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME"}
+
+    # --- NEW: UPDATE TELEMETRY UI METHOD ---
+    def update_telemetry_dashboard(self, data):
+        phase_str = self.phase_names.get(data['phase'], "UNKNOWN")
+        self.lbl_phase.setText(f"Phase: {phase_str}")
+        self.lbl_action.setText(f"Action: '{data['action']}'")
+        self.lbl_line.setText(f"Line: {data['line_var']}")
+        self.lbl_gyro.setText(f"Gyro: ({data['gyro1']}, {data['gyro2']})")
+        self.lbl_flags.setText(f"Flags: {data['flags']}")
+
+    # --- KEYBOARD LISTENER ---
+    def keyPressEvent(self, event):
+        key = event.key()
+        action_char = None
+
+        # 1. --- HOTKEYS FOR STATE SELECTION ---
+        if key == Qt.Key.Key_1:
+            self.state_combo.setCurrentIndex(0)
+            print("Hot-swapped State: 1 (Auto, Auto)")
+            return
+        elif key == Qt.Key.Key_2:
+            self.state_combo.setCurrentIndex(1)
+            print("Hot-swapped State: 2 (Auto, Manual)")
+            return
+        elif key == Qt.Key.Key_3:
+            self.state_combo.setCurrentIndex(2)
+            print("Hot-swapped State: 3 (Manual, Auto)")
+            return
+        elif key == Qt.Key.Key_4:
+            self.state_combo.setCurrentIndex(3)
+            print("Hot-swapped State: 4 (Manual, Manual)")
+            return
+
+        # 2. --- HOTKEYS FOR TARGET SELECTION ---
+        elif key == Qt.Key.Key_W:
+            self.target_combo.setCurrentIndex(0)
+            print("Hot-swapped Target: Wheel")
+            return
+        elif key == Qt.Key.Key_A:
+            self.target_combo.setCurrentIndex(1)
+            print("Hot-swapped Target: Arm")
+            return
+
+        # 3. --- ACTION COMMANDS ---
+        # Get the currently selected target to filter inputs
+        target = self.target_combo.currentData()
+        
+        if target == "wheel":
+            if key == Qt.Key.Key_Up: action_char = 'f'
+            elif key == Qt.Key.Key_Down: action_char = 'b'
+            elif key == Qt.Key.Key_Right: action_char = 'r'
+            elif key == Qt.Key.Key_Left: action_char = 'l'
+            elif key == Qt.Key.Key_S: action_char = 's'
+            elif key == Qt.Key.Key_E: action_char = 'e'
+            elif key == Qt.Key.Key_O: action_char = 'o'
+            elif key == Qt.Key.Key_U: action_char = 'u' # Lagt till U-sväng
+            
+        elif target == "arm":
+            if key == Qt.Key.Key_V: action_char = 'v'
+            elif key == Qt.Key.Key_H: action_char = 'h'
+
+        # If a valid action key was pressed, send the packet
+        if action_char:
+            self.send_packet(action_char)
+
+    def send_packet(self, action_char):
+        # Read the current selections from the dropdowns
+        current_state = self.state_combo.currentData()
+        current_target = self.target_combo.currentData()
+
+        # Map target string to byte (0x00 for wheel, 0x01 for arm)
+        target_byte = 0x00 if current_target == "wheel" else 0x01
+        
+        # Convert character to ASCII byte
+        action_byte = ord(str(action_char)[0])  
+
+        # Pack the 8 bytes
+        packet = struct.pack('BBBBBBBB',
+                             0x05,           # Start byte
+                             current_state,  # State (1, 2, 3, or 4)
+                             target_byte,    # Cmd (0 or 1)
+                             action_byte,    # Action (ASCII int)
+                             0x00,           # Line var reserved
+                             0x00,           # Gyro 1 reserved
+                             0x00,           # Gyro 2 reserved
+                             0xFF)           # End byte
+        
+        try:
+            self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
+            # print(f"[{current_target.upper()}] Sent '{action_char}' (Hex: {packet.hex().upper()})")
+        except Exception as e:
+            print(f"Error sending packet: {e}")
+
+    # Video display methods
+    def update_image(self, cv_img):
+        qt_img = self.convert_cv_qt(cv_img)
+        self.image_label.setPixmap(qt_img)
+
+    def convert_cv_qt(self, cv_img):
+        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_image.shape
+        bytes_per_line = ch * w
+        convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(convert_to_Qt_format)
+
+    def closeEvent(self, event):
+        # Cleanly stop the thread when closing the application
+        self.telemetry_thread.stop()
+        self.telemetry_thread.wait()
+        super().closeEvent(event)
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
