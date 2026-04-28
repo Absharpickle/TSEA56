@@ -453,7 +453,7 @@ int main() {
                     log_next_action = true;
                     printf("\n-> Executing arm pickup...\n");
                 }
-                // Efter 5 sekunder totalt (2s stopp + 3s plock), åker vi hem
+                // Efter 3 sekunder totalt (2s stopp + 1s plock), åker vi hem
                 else if (elapsed_time >= 5) {
                     is_picking_up = false;
                     current_phase = PHASE_TO_HOME;
@@ -473,8 +473,8 @@ int main() {
             
             // --- FRAMÅT-KÖRNINGS-LOGIK ---
             else {
-                // Vi körde framåt i 5 sekunder, detta räknas som att vi "nått nästa korsning"
-                if (elapsed_time >= 5) {
+                // Vi körde framåt i 3 sekunder, detta räknas som att vi "nått nästa korsning"
+                if (elapsed_time >= 3) {
                     current_action_index++;
                     aktivt_beslut_fn(current_action_index);
 
