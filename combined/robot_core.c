@@ -52,6 +52,7 @@ int current_action_index = 0; // Index för att hämta aktuellt belut. Räknas u
 unsigned char current_auto_state = 1; // Bestämmer STATE (auto, auto), (manuell, auto) osv
 bool log_next_action = false; // Har med logg att göra
 
+// Nya variabler för den icke-blockerande "blasting"-logiken
 bool is_rotating = false;
 bool is_picking_up = false;
 
@@ -85,15 +86,15 @@ void init_karta() {
 // Funktion som avgör svängriktning genom att jämföra väderstreck
 char get_turn(char nu, char nasta) {
     if (nu == nasta) return 'f';
-    if (nu == 'n' && nasta == 'e') return 'e';
+    if (nu == 'n' && nasta == 'e') return 'e'; // Rotation medsols
     if (nu == 'e' && nasta == 's') return 'e';
     if (nu == 's' && nasta == 'w') return 'e';
     if (nu == 'w' && nasta == 'n') return 'e';
-    if (nu == 'n' && nasta == 'w') return 'o';
+    if (nu == 'n' && nasta == 'w') return 'o'; // Rotation motsols
     if (nu == 'w' && nasta == 's') return 'o';
     if (nu == 's' && nasta == 'e') return 'o';
     if (nu == 'e' && nasta == 'n') return 'o';
-    return 'u'; 
+    return 'u'; // Rotation 180 grader
 }
 
 // Funktion som anger motsatt riktning
@@ -120,7 +121,6 @@ void bygg_beslut(int rutt[], char start_dir, char beslut[]) {
     beslut[i] = 'X'; // Sista beslutet är 'X' som betyder hämta/lämna varan
     beslut[i+1] = '\0'; // Avslutar array
 }
-
 
 // Funktion som beräknar rutten genom BFS + kostnad för svängar
 int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
@@ -201,7 +201,6 @@ void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) { // Tar in vilke
     char dir_vid_vara = nodriktningsmatris[ingang][utgang]; // Beräknar vilket väderstreck roboten har när den hämtat varan 
     int cost_utgang = hitta_rutt(utgang, START, rutt_alt1, dir_vid_vara);
     int cost_ingang = hitta_rutt(ingang, START, rutt_alt2, dir_vid_vara) + 100; 
-
 
     // Bestämmer huruvida roboten ska köra vidare till nästa nod eller vända och köra tillbaka (straff 100) efter att ha hämtat varan
     if (cost_utgang <= cost_ingang) {
@@ -385,6 +384,15 @@ int main() {
                 // Start Auto Mode if 'f' is pressed
                 if (action == 'f' && current_phase == PHASE_IDLE) {
                     start_autonomous_sequence(state);
+                } else if (current_phase != PHASE_IDLE) {
+                    // Inject Sensor Data before forwarding!
+                    buffer[4] = line_var;
+                    buffer[5] = gyro1;
+                    buffer[6] = gyro2;
+
+                    write(i2c_styr_fd, buffer, PACKET_SIZE);
+                    log_verification(buffer, action);
+                    printf("-> Manual Command Forwarded: '%c'\n", action);
                 }
             } else if (state == 0x02 || state == 0x03) {
                 // MANUAL OVERRIDE
@@ -395,8 +403,9 @@ int main() {
                     is_picking_up = false;
                 }
                 
+                // Inject Sensor Data before forwarding!
                 buffer[4] = line_var;
-                buffer[5] = angle;
+                buffer[5] = gyro1;
                 buffer[6] = gyro2;
 
                 write(i2c_styr_fd, buffer, PACKET_SIZE);
@@ -492,6 +501,7 @@ int main() {
                     
                     log_next_action = true; 
 
+                    // Dessa fasbyten sker *efter* att plocket är utfört
                     if (current_phase == PHASE_TO_HOME && aktivt_beslut == 'X') {
                         current_phase = PHASE_IDLE;
                         aktivt_beslut = 's';
@@ -520,7 +530,7 @@ int main() {
                     write(i2c_styr_fd, stop_packet, PACKET_SIZE);
 
                     // 2. Ta reda på aktuell nod och nästa nod
-                    int u_nod = -1, v_nod = -1; // Ändrade 'u' till 'u_nod' för att undvika konflikt med char 'u'
+                    int u_nod = -1, v_nod = -1;
                     if (current_phase == PHASE_TO_ITEM) {
                         u_nod = rutt_till_vara[current_action_index];
                         v_nod = rutt_till_vara[current_action_index + 1];
@@ -540,7 +550,7 @@ int main() {
                             line_var, gyro1, gyro2, 0xFF
                         };
                         write(i2c_styr_fd, turn_back, PACKET_SIZE);
-                        usleep(1500000); // Vänta medan roboten roterar 180 grader
+                        // usleep(1500000); // Vänta medan roboten roterar 180 grader
 
                         // 5. Beräkna ny riktning in och planera ny rutt från nod U
                         char dir_mot_v = nodriktningsmatris[u_nod][v_nod];
@@ -583,6 +593,11 @@ int main() {
                 }
             }
         }
+        
+        // -------------------------------------------------------------
+        // 4. TINY DELAY (2000 microseconds = 2 milliseconds / 500Hz)
+        // -------------------------------------------------------------
+        //usleep(2000); 
     }
 
     close(sockfd);
