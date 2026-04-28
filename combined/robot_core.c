@@ -62,7 +62,8 @@ bool gui_known = false; // Har GUI:t hört av sig än?
 int telemetry_counter = 0; // Räknare för att inte spamma nätverket
 
 // --- LOOP TIMING GLOBALS ---
-char aktivt_beslut = 's'; // Börjar med 's' (stå stilla)
+char nasta_beslut  = 's'; // Nästa beslut från beslutsarrayen (e, o, u, f, X osv)
+char aktivt_beslut = 's'; // Det som faktiskt skickas till styrmodulen ('f' nästan hela tiden, annars rotation/stopp)
 int  loop_counter = 0; // Räknar upp loopen för att se när nästa beslut ska skickas (just nu bara test)
 
 // =================================================================
@@ -249,14 +250,14 @@ void log_sensor_data(const unsigned char *received) {
     fclose(f);
 }
 
-// Uppdaterar beslutet till styrmodulen (kolla vidare på denna)
+// Läser nästa beslut ur beslutsarrayen och lagrar i nasta_beslut (påverkar EJ aktivt_beslut direkt)
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
-        aktivt_beslut = beslut_till_vara[index];
+        nasta_beslut = beslut_till_vara[index];
     } else if (current_phase == PHASE_PICKUP) {
-        aktivt_beslut = 'v'; // Arm pickup action OBS behöver uppdateras med faktiska beslut
+        nasta_beslut = 'v'; // Arm pickup action OBS behöver uppdateras med faktiska beslut
     } else if (current_phase == PHASE_TO_HOME) {
-        aktivt_beslut = beslut_hem[index];
+        nasta_beslut = beslut_hem[index];
     }
 }
 
@@ -273,9 +274,10 @@ void start_autonomous_sequence(unsigned char state) {
     current_action_index = 0; // Var i beslutslistan vi är
     
     loop_counter = 0; // Endast vid simulering
-    aktivt_beslut_fn(current_action_index); // Vilket beslut tar vi just nu
+    aktivt_beslut_fn(current_action_index); // Läs första beslutet ur arrayen
     
-    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+    if (nasta_beslut == 'e' || nasta_beslut == 'o' || nasta_beslut == 'u') {
+        aktivt_beslut = nasta_beslut; // Starta direkt med rotation
         is_rotating = true;
         action_timer_start = time(NULL); // Starta klockan för sekvensen
     } else {
@@ -450,10 +452,11 @@ int main() {
                 else if (elapsed_in_state >= 5) {
                     is_picking_up = false;
                     current_phase = PHASE_TO_HOME;
-                    current_action_index = 0;
-                    aktivt_beslut_fn(current_action_index);
+                    current_action_index = 0; // Index nollställs vid fasövergång
+                    aktivt_beslut_fn(current_action_index); // Läs första beslutet för hemresan
                     
-                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                    if (nasta_beslut == 'e' || nasta_beslut == 'o' || nasta_beslut == 'u') {
+                        aktivt_beslut = nasta_beslut; // Sätt rotation som aktivt beslut
                         is_rotating = true;
                         action_timer_start = time(NULL);
                     } else {
@@ -466,11 +469,12 @@ int main() {
             else {
                 // NORMAL KÖRNING: Vi väntar på flaggan 'flags_ny_korsning' från sensorn
                 if (flags_ny_korsning) {
+                    // Index uppdateras BARA HÄR – en gång per korsning
                     current_action_index++;
-                    aktivt_beslut_fn(current_action_index);
+                    aktivt_beslut_fn(current_action_index); // Läs nästa beslut ur arrayen
                     action_timer_start = time(NULL); // Nollställ timern för den nya manövern
 
-                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                    if (nasta_beslut == 'e' || nasta_beslut == 'o' || nasta_beslut == 'u') {
                         // Skicka stopp först (säkerställer renare rotation)
                         unsigned char stop_packet[PACKET_SIZE] = {
                             0x05, current_auto_state, 0x00, 's', 
@@ -478,10 +482,11 @@ int main() {
                         };
                         write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         
+                        aktivt_beslut = nasta_beslut; // Sätt rotation som aktivt beslut
                         is_rotating = true;
                         log_next_action = true;
                     }
-                    else if (aktivt_beslut == 'X') {
+                    else if (nasta_beslut == 'X') {
                         if (current_phase == PHASE_TO_ITEM) {
                             // Vi är framme vid varan, stanna först
                             aktivt_beslut = 's';
