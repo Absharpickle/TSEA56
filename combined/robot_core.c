@@ -431,7 +431,7 @@ int main() {
         // -------------------------------------------------------------
         if (current_phase != PHASE_IDLE) { // Simulator för autonomt läge
             
-            // Varje steg i logiken sker oberoende av sensorer, enbart baserat på att 5 sekunder gått
+            // Varje steg i logiken sker oberoende av sensorer, enbart baserat på att tid har gått
             if (time(NULL) - action_timer_start >= 5) {
                 
                 if (is_rotating) {
@@ -520,7 +520,7 @@ int main() {
                 }
             }
 
-            // BLAST THE CURRENT ACTION CONTINUOUSLY EVERY ITERATION (500Hz)
+            // BLAST THE CURRENT ACTION CONTINUOUSLY (Varje varv i loopen)
             if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
                 
                 unsigned char auto_packet[PACKET_SIZE] = {
@@ -534,13 +534,22 @@ int main() {
                     0xFF
                 };
 
-                // SEND TO MICROCONTROLLER EVERY LOOP ITERATION
+                // Skicka faktiskt till mikrokontrollern (I2C) 500ggr/s
                 write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 
+                // Utskrift till terminalen sker BARA när vi byter beslut (för att inte krascha terminalen)
                 if (log_next_action) {
-                    log_verification(auto_packet, auto_packet[3]);
                     printf("Action updated to: '%c'\n", auto_packet[3]);
                     log_next_action = false;
+                }
+
+                // Loggning till filen sker throttlat till 10Hz för att inte skada SD-kortet, 
+                // men det bevisar att I2C-blasting pågår!
+                static int blasting_log_counter = 0;
+                blasting_log_counter++;
+                if (blasting_log_counter >= 50) { 
+                    log_verification(auto_packet, auto_packet[3]);
+                    blasting_log_counter = 0;
                 }
             }
         }
