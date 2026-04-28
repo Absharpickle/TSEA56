@@ -245,8 +245,8 @@ void aktivt_beslut_fn(int index) {
 
 // Här sätts var varan ligger någonstans, behöver uppdateras och integreras med guin
 void start_autonomous_sequence(unsigned char state) {
-    vara_u = 6; 
-    vara_v = 7; 
+    vara_u = 10; 
+    vara_v = 11; 
     
     printf("\n=== CALCULATING AUTONOMOUS ROUTE ===\n");
     planera_hela_resan(START, 's'); // Vi är pån startnoden och roboten är PRELIMINÄRT riktad söderut
