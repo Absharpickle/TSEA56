@@ -61,7 +61,7 @@ class MainWindow(QMainWindow):
         self.state_combo.addItem("2: (Auto, Manual)", 1)
         self.state_combo.addItem("3: (Manual, Auto)", 2)
         self.state_combo.addItem("4: (Manual, Manual)", 3)
-        self.state_combo.setCurrentIndex(3) # Default to 4
+        self.state_combo.setCurrentIndex(3) # Default to 3
         # Return focus to main window after clicking so keyboard works
         self.state_combo.currentIndexChanged.connect(lambda: self.setFocus()) 
         self.control_layout.addWidget(QLabel("State:"))
