@@ -41,9 +41,9 @@ class TelemetryThread(QThread):
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
-                # Check if it's our 8-byte telemetry packet (Starts with 0x06, Ends with 0xFF)
+                # Check if it's our 9-byte telemetry packet (Starts with 0x06, Ends with 0xFF)
                 if len(data) == 9 and data[0] == 0x06 and data[8] == 0xFF:
-                    # Unpack 8 unsigned bytes
+                    # Unpack 9 unsigned bytes
                     unpacked = struct.unpack('9B', data)
                     
                     # Create a dictionary of the received data
@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # --- TELEMETRY SETUP ---
-        self.pi_ip = "10.42.0.1" # Change to your Pi's IP if needed
+        self.pi_ip = "10.42.0.1"
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # We must bind our socket to listen for returning packets on whatever port the OS assigns
