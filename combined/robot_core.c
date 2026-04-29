@@ -52,8 +52,8 @@ bool log_next_action         = false;      // Flagga: skriv ut nästa beslutsbyt
 
 bool is_rotating   = false; // Sant medan roboten svänger på plats (tidsstyrd)
 bool is_picking_up = false; // Sant medan roboten utför pickup-sekvensen (tidsstyrd)
-time_t action_timer_start = 0; // Tidpunkt då nuvarande tidsstyrd åtgärd startades
-uint8_t korsning_aktiv = 0;    // Debounce: 1 = vi är inne på en korsning/markering just nu
+long long action_timer_start = 0; // Tidpunkt (i millisekunder) då nuvarande tidsstyrd åtgärd startades
+uint8_t korsning_aktiv = 0;       // Debounce: 1 = vi är inne på en korsning/markering just nu
 
 // --- TELEMETRY GLOBALS FÖR GUI ---
 bool gui_known        = false; // Sant när vi fått minst ett paket från GUI:n (vet IP/port)
@@ -63,6 +63,15 @@ int telemetry_counter = 0;     // Räknar loop-iterationer för 10 Hz telemetri-
 char nasta_beslut  = 's'; // Nästa beslut i kön (index+1) – visas på GUI som förhandsvisning
 char aktivt_beslut = 's'; // Det beslut som just nu skickas till motorstyrningen
 int  loop_counter  = 0;   // Generell loopräknare (används vid debug/timing)
+
+// =================================================================
+// HJÄLPFUNKTION: Tidsmätning i millisekunder
+// =================================================================
+long long current_time_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
 
 // =================================================================
 // 1. KARTA, HJÄLPFUNKTIONER & RUTTPLANERING
@@ -198,21 +207,29 @@ void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) {
     bygg_beslut(rutt_till_vara, nuvarande_dir, beslut_till_vara); // Bygg beslutslista för varuresa
     
     char dir_vid_vara = nodriktningsmatris[ingang][utgang]; // Riktning roboten har efter pickup
-    int cost_utgang   = hitta_rutt(utgang, START, rutt_alt1, dir_vid_vara); // Hem från utgång
-    int cost_ingang   = hitta_rutt(ingang, START, rutt_alt2, dir_vid_vara) + 100; // Hem från ingång (kräver vändning, +100 straff)
+    char dir_efter_vanding = get_motsatt_dir(dir_vid_vara); // Riktning OM vi vänder 180 grader
+    
+    int cost_utgang  = hitta_rutt(utgang, START, rutt_alt1, dir_vid_vara); // Hem från utgång
+    int cost_ingang  = hitta_rutt(ingang, START, rutt_alt2, dir_efter_vanding) + 100; // Hem från ingång 
 
     if (cost_utgang <= cost_ingang) {
         // Kör hem från utgångssidan, ingen vändning behövs
         memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
         bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
+        
+        // Lägg till 'f' först så att roboten kör fram till nästa korsning!
+        int len = strlen(beslut_hem) + 1;
+        memmove(&beslut_hem[1], &beslut_hem[0], len);
+        beslut_hem[0] = 'f'; 
     } else {
         // Kör hem från ingångssidan, lägg till 'u' (u-sväng) först i beslutslistan
         memcpy(rutt_hem, rutt_alt2, sizeof(rutt_alt2));
-        char dir_efter_vanding = get_motsatt_dir(dir_vid_vara);
         bygg_beslut(rutt_hem, dir_efter_vanding, beslut_hem);
+        
+        // Prefixera med u-sväng
         int len = strlen(beslut_hem) + 1;
         memmove(&beslut_hem[1], &beslut_hem[0], len);
-        beslut_hem[0] = 'u'; // Prefixera med u-sväng
+        beslut_hem[0] = 'u'; 
     }
 }
 
@@ -242,17 +259,6 @@ void log_sensor_data(const unsigned char *received) {
     fclose(f);
 }
 
-/*
- * aktivt_beslut_fn(index)
- *
- * Sätter BÅDE aktivt_beslut (vad roboten gör just nu) OCH
- * nasta_beslut (index+1, visas på GUI så man ser vad som kommer härnäst).
- *
- * FIX: Tidigare satte funktionen bara nasta_beslut till index,
- *      och anroparna kopierade sedan nasta_beslut -> aktivt_beslut,
- *      vilket dels gav fel GUI-värde och dels kraschade vid fas-byten
- *      eftersom nasta_beslut pekade på fel array.
- */
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
         aktivt_beslut = beslut_till_vara[index];
@@ -279,14 +285,12 @@ void start_autonomous_sequence(unsigned char state) {
     korsning_aktiv       = 0;             // Ingen aktiv korsning ännu
     loop_counter         = 0; 
 
-    // FIX: aktivt_beslut_fn sätter nu BÅDE aktivt_beslut och nasta_beslut korrekt.
-    //      Tidigare kopierades nasta_beslut -> aktivt_beslut här, vilket var fel.
     aktivt_beslut_fn(current_action_index);
 
     // Om första beslutet är en rotation, starta rotationstimern direkt
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
         is_rotating = true;
-        action_timer_start = time(NULL); 
+        action_timer_start = current_time_ms(); 
     }
 
     log_next_action = true; 
@@ -367,7 +371,7 @@ int main() {
         // -------------------------------------------------------------
         unsigned char sensor_packet[PACKET_SIZE];
         if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { 
-           
+            
             // Logga bara om paketet ändrats sedan sist (undviker logspam)
             static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
             if (memcmp(sensor_packet, last_sensor_packet, PACKET_SIZE) != 0) {
@@ -447,14 +451,15 @@ int main() {
         // -------------------------------------------------------------
         if (current_phase != PHASE_IDLE) { 
             
-            time_t elapsed_in_state = time(NULL) - action_timer_start; // Sekunder sedan åtgärden startade
+            long long elapsed_in_state = current_time_ms() - action_timer_start; // Millisekunder sedan start
 
             if (is_rotating) {
-                // Tidsstyrd rotation: vänta 3 sekunder och sätt sedan rakt-framkörning
-                if (elapsed_in_state >= 3) { 
+                // Tidsstyrd rotation: 500 ms inbromsning (hanteras automatiskt vid paket-sändningen)
+                // Sedan 10000 ms sväng. Totalt 10500 ms innan vi kör framåt igen.
+                if (elapsed_in_state >= 10500) { 
                     is_rotating   = false;
-                    aktivt_beslut = 'f'; // Kör rakt efter avslutad rotation
-                    // Uppdatera nasta_beslut till index+1 nu när rotation är klar
+                    aktivt_beslut = 'f'; // Kör rakt efter avslutad rotation för att nå nästa nod
+                    
                     if (current_phase == PHASE_TO_ITEM) {
                         nasta_beslut = beslut_till_vara[current_action_index + 1];
                     } else if (current_phase == PHASE_TO_HOME) {
@@ -464,36 +469,27 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                // Pickup-sekvens i två steg:
-                // Steg 1 (efter 2s): skicka pickup-kommando 'v' till mekaniken
-                if (elapsed_in_state >= 2 && aktivt_beslut == 's') {
+                // Pickup-sekvens i två steg (10000 millisekunder vardera):
+                
+                // Steg 1 (efter 10s): skicka pickup-kommando 'v' till mekaniken
+                if (elapsed_in_state >= 10000 && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
-                    nasta_beslut  = beslut_hem[0]; // Nästa är hemruttens start
+                    nasta_beslut  = beslut_hem[0]; // Visar om nästa steg är 'f' eller 'u'
                     log_next_action = true;
                 }
-                // Steg 2 (efter 5s): pickup klar, byt fas till hemkörning
-                else if (elapsed_in_state >= 5) {
+                // Steg 2 (efter 20s): pickup klar (10s har gått med 'v' aktivt), byt fas till hemkörning
+                else if (elapsed_in_state >= 20000) {
                     is_picking_up        = false;
                     current_phase        = PHASE_TO_HOME;
                     current_action_index = 0; // Börja från index 0 i beslut_hem
 
-                    // FIX: aktivt_beslut_fn sätter nu korrekt aktivt_beslut och nasta_beslut
-                    //      för den nya fasen PHASE_TO_HOME. Tidigare kopierades nasta_beslut
-                    //      (som fortfarande pekade på beslut_till_vara) -> aktivt_beslut, fel.
+                    // Ladda in första beslutet för hemresan (antingen 'f' eller 'u')
                     aktivt_beslut_fn(current_action_index);
 
-                    // Om hemruttens första beslut är en rotation (e/o/u):
-                    // skicka stopp-paket FÖRST så roboten inte kör rakt fram under svängen.
-                    // FIX: Tidigare skickades inget stopp här, vilket orsakade att roboten
-                    //      körde rakt fram under rotationstiden och sedan skickade fel beslut.
+                    // Om hemruttens första beslut är en rotation ('u' etc):
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                        unsigned char stop_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 's',
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         is_rotating = true;
-                        action_timer_start = time(NULL);
+                        action_timer_start = current_time_ms();
                     }
                     printf("\n-> PHASE CHANGE: Heading Home...\n");
                     log_next_action = true;
@@ -501,27 +497,16 @@ int main() {
             } 
             else {
                 // NORMAL KÖRNING: Vi väntar på flaggan 'flags_korsning' från sensorn
-                // flags_korsning == 2 (korsning) ELLER flags_korsning == 1 (pickup-markering)
                 if ((flags_korsning == 2 || flags_korsning == 1) && !korsning_aktiv) {
                     korsning_aktiv    = 1;    // Markera att vi är inne i en korsning (debounce)
                     flags_ny_korsning = 0;    // Rensa ny-korsning-flaggan
                     
                     current_action_index++; // Gå vidare till nästa beslut i listan
-
-                    // FIX: aktivt_beslut_fn sätter nu BÅDE aktivt_beslut och nasta_beslut.
-                    //      Tidigare kopierades nasta_beslut -> aktivt_beslut, vilket gav
-                    //      felaktigt GUI-värde och kraschade vid fas-byte.
                     aktivt_beslut_fn(current_action_index);
-                    action_timer_start = time(NULL); // Starta timer för eventuell rotation
+                    action_timer_start = current_time_ms(); // Starta timer för eventuell rotation
 
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                        // Rotation behövs: stoppa roboten, starta rotationstimer
-                        unsigned char stop_packet[PACKET_SIZE] = {
-                            0x05, current_auto_state, 0x00, 's', 
-                            line_var, gyro1, gyro2, 0xFF
-                        };
-                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
-                        
+                        // is_rotating tvingar automatiskt fram 500ms 's' i paket-byggaren nedan
                         is_rotating = true;
                         log_next_action = true;
                     }
@@ -563,11 +548,20 @@ int main() {
             // Skicka aktivt kommando till motorstyrningen varje loop-iteration
             if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
                 
+                char skickat_kommando = aktivt_beslut;
+                
+                // --- MJUKT STOPP (500 ms) INNAN SVÄNG ---
+                // Om vi ska svänga, åsidosätter vi beslutet och tvingar iväg 's' de första 500 millisekunderna.
+                // Detta dödar robotens framåtmomentum innan den faktiskt börjar snurra.
+                if (is_rotating && (current_time_ms() - action_timer_start < 500)) {
+                    skickat_kommando = 's';
+                }
+
                 unsigned char auto_packet[PACKET_SIZE] = {
-                    0x05,                                                                   // Header
-                    current_auto_state,                                                     // Körläge
-                    (current_phase == PHASE_PICKUP && aktivt_beslut == 'v') ? 0x01 : 0x00, // Pickup-flagga
-                    aktivt_beslut,                                                          // Kommando till motorn
+                    0x05,                                                                       // Header
+                    current_auto_state,                                                         // Körläge
+                    (current_phase == PHASE_PICKUP && aktivt_beslut == 'v') ? 0x01 : 0x00,      // Pickup-flagga
+                    skickat_kommando,                                                           // Kommando (sväng, rakt fram eller mjukt stopp)
                     line_var, // Aktuell linjesensordata (skickas med för motorstyrningens PID)
                     gyro1,    // Gyrodata byte 1
                     gyro2,    // Gyrodata byte 2
@@ -578,8 +572,8 @@ int main() {
                 
                 // Skriv ut till konsolen första gången ett nytt beslut sätts
                 if (log_next_action) {
-                    printf("Action updated to: '%c' (Index: %d, Next: '%c')\n",
-                           auto_packet[3], current_action_index, nasta_beslut);
+                    printf("Action updated to: '%c' (Sending to motors: '%c', Index: %d, Next: '%c')\n",
+                           aktivt_beslut, auto_packet[3], current_action_index, nasta_beslut);
                     log_next_action = false;
                 }
 
