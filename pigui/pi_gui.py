@@ -60,8 +60,9 @@ class TelemetryThread(QThread):
             except socket.timeout:
                 continue
             except Exception as e:
-                pass # Ignore other socket errors during normal operation
-
+                print(f"[!] Telemetry error: {e}") # Ignore other socket errors during normal operation
+                # DEBUG
+                print(f"Received {len(data)} bytes: {data.hex()}")
     def stop(self):
         self.running = False
 

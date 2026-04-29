@@ -541,7 +541,7 @@ int main() {
                     flags,                        // Sensordata: Flaggor (bitmaskade)
                     0xFF                          // Footer
                 };
-                sendto(sockfd, telemetry_packet, (PACKET_SIZE+1), 0, (struct sockaddr *)&cliaddr, len);
+                sendto(sockfd, telemetry_packet, (PACKET_SIZE+1), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                 telemetry_counter = 0;
             }
         }
