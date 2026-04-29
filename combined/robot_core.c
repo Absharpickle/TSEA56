@@ -482,8 +482,16 @@ int main() {
                     //      (som fortfarande pekade på beslut_till_vara) -> aktivt_beslut, fel.
                     aktivt_beslut_fn(current_action_index);
 
-                    // Om hemruttens första beslut är en rotation, starta rotationstimern
+                    // Om hemruttens första beslut är en rotation (e/o/u):
+                    // skicka stopp-paket FÖRST så roboten inte kör rakt fram under svängen.
+                    // FIX: Tidigare skickades inget stopp här, vilket orsakade att roboten
+                    //      körde rakt fram under rotationstiden och sedan skickade fel beslut.
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                        unsigned char stop_packet[PACKET_SIZE] = {
+                            0x05, current_auto_state, 0x00, 's',
+                            line_var, gyro1, gyro2, 0xFF
+                        };
+                        write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         is_rotating = true;
                         action_timer_start = time(NULL);
                     }
