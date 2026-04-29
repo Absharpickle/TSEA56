@@ -4,7 +4,7 @@ import numpy as np
 import socket
 import struct
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame)
+                             QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame, QGridLayout)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage, QPixmap
 import os
@@ -80,14 +80,47 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
+        # Horizontal line separator
+        self.top_hlayout = QHBoxLayout()
+        self.layout.addLayout(self.top_hlayout)
+
         # Video Box
         self.image_label = QLabel(self)
         self.image_label.setFixedSize(640, 480)
         self.image_label.setStyleSheet("border: 3px solid #34495e; background-color: black;")
-        self.layout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.top_hlayout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # MAP GRID
+        self.map_frame = QFrame()
+        self.map_frame.setFixedSize(480, 480)
+        self.map_frame.setStyleSheet("background-color: #34495e; border-radius: 5px;")
+        self.map_layout = QGridLayout(self.map_frame)
+        self.map_layout.setSpacing(5)
+
+        self.grid_notes = {}
+
+        self.lbl_start = QLabel("START\n(25)")
+        self.lbl_start.setFixedSize(60, 60)
+        self.lbl_start.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_start.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; border-radius: 5px;")
+        self.map_layout.addWidget(self.lbl_start, 0, 0)
+        self.grid_notes[25] = self.lbl_start
+
+        for i in range(25):
+            rad = (i // 5) + 1
+            col = i % 5
+            lbl = QLabel(str(i))
+            lbl.setFixedSize(60, 60)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("background-color: #7f8c8d; color: white; font-weight: bold; border-radius: 5px;")
+            self.map_layout.addWidget(lbl, rad, col)
+            self.grid_notes[i] = lbl
+
+        self.top_hlayout.addWidget(self.map_frame, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # --- TELEMETRY SETUP ---
-        self.pi_ip = "10.42.0.1"
+        # self.pi_ip = "10.42.0.1"  # IP till pi hotspot
+        self.pi_ip = "192.168.1.50" # IP för test hemma
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # We must bind our socket to listen for returning packets on whatever port the OS assigns
@@ -142,9 +175,10 @@ class MainWindow(QMainWindow):
         for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action, self.lbl_line, self.lbl_gyro, self.lbl_flags]:
             lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; padding: 5px;")
             self.dashboard_layout.addWidget(lbl)
-            
-        self.layout.addWidget(self.dashboard_frame)
 
+
+        self.layout.addWidget(self.dashboard_frame)
+            
         # Start Video Thread
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
