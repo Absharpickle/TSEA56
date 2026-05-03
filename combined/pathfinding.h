@@ -9,7 +9,7 @@
 #define START 25     // Start/slut på nod 25
 #define NONE -1      // Betyder att det inte finns en föregående nod
 #define STOP -1      // Stoppvillkor för ruttarray
-#define MAX_ITEMS 20 // Max antal varor per körning
+#define MAX_ITEMS 5 // Max antal varor per körning
 
 // --- MAP DATA (definierade i pathfinding.c) ---
 extern char nodriktningsmatris[NODES][NODES];
