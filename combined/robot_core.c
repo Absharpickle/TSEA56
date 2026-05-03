@@ -28,6 +28,9 @@
 #define PACKET_SIZE 8           // Paketstorleken för kommunikationen inom systemet (i2c)
 #define VERIFY_LOG_FILE "verifikation_keys.txt" // Loggfil
 
+// --- SIM MODE DEFINITIONS ---
+#define SIM_SEGMENT_MS 3000     // Simulerad tid (ms) mellan korsningar i sim-läge
+
 // --- ALGORITHM GLOBALS ---
 char nodriktningsmatris[NODES][NODES]; // Riktning mellan noder: 'n','s','e','w'
 int  vag[NODES][NODES];                // Grannmatris: 1 = kant finns, 0 = ingen kant
@@ -54,6 +57,11 @@ bool is_rotating   = false; // Sant medan roboten svänger på plats (tidsstyrd)
 bool is_picking_up = false; // Sant medan roboten utför pickup-sekvensen (tidsstyrd)
 long long action_timer_start = 0; // Tidpunkt (i millisekunder) då nuvarande tidsstyrd åtgärd startades
 uint8_t korsning_aktiv = 0;       // Debounce: 1 = vi är inne på en korsning/markering just nu
+
+// --- SIM MODE GLOBALS ---
+bool sim_sensor = false; // Sant om sensorkortet (0x10) saknas → simulera korsningar med timer
+bool sim_motor  = false; // Sant om motorstyrningen (0x12) saknas → hoppa över I2C-skrivningar
+long long sim_segment_timer = 0; // Tidpunkt då vi börjar vänta på nästa simulerade korsning
 
 // --- TELEMETRY GLOBALS FÖR GUI ---
 bool gui_known        = false; // Sant när vi fått minst ett paket från GUI:n (vet IP/port)
@@ -297,10 +305,14 @@ void start_autonomous_sequence(unsigned char state, uint8_t item_u, uint8_t item
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
         is_rotating = true;
         action_timer_start = current_time_ms(); 
+    } else if (sim_sensor) {
+        // I sim-läge: starta segmenttimern för att simulera "kör till nästa korsning"
+        sim_segment_timer = current_time_ms();
     }
 
     log_next_action = true; 
     printf("-> Route Calculated. Driving to item...\n");
+    if (sim_sensor) printf("[SIM] Intersections will be triggered every %d ms\n", SIM_SEGMENT_MS);
 }
 
 // =================================================================
@@ -333,10 +345,14 @@ int main() {
     if (i2c_styr_fd >= 0) { 
         ioctl(i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); 
         if (write(i2c_styr_fd, NULL, 0) < 0) { 
-            printf("[WARNING] Motor Controller (0x12) missing. Running in Sim Mode.\n"); 
+            sim_motor = true;
+            printf("[SIM] Motor Controller (0x12) missing. Motor writes disabled.\n"); 
         } else {
             printf("Connected to Motor Controller (0x12)\n"); 
         }
+    } else {
+        sim_motor = true;
+        printf("[SIM] Could not open I2C for Motor Controller. Motor writes disabled.\n");
     }
 
     // Öppna I2C-anslutning till sensorkortet (0x10)
@@ -344,10 +360,18 @@ int main() {
     if (i2c_sens_fd >= 0) {
         ioctl(i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
         if (write(i2c_sens_fd, NULL, 0) < 0) {
-            printf("[WARNING] Sensor Board (0x10) missing. Will send zeros.\n");
+            sim_sensor = true;
+            printf("[SIM] Sensor Board (0x10) missing. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
         } else {
             printf("Connected to Sensor Board (0x10)\n");
         }
+    } else {
+        sim_sensor = true;
+        printf("[SIM] Could not open I2C for Sensor Board. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
+    }
+
+    if (sim_sensor || sim_motor) {
+        printf("\n*** RUNNING IN SIM MODE ***\n\n");
     }
 
     // Skapa UDP-socket för kommunikation med GUI på datorn
@@ -376,7 +400,7 @@ int main() {
         // 1. READ FROM SENSOR (0x10)
         // -------------------------------------------------------------
         unsigned char sensor_packet[PACKET_SIZE];
-        if (i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { 
+        if (!sim_sensor && i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { 
             
             // Logga bara om paketet ändrats sedan sist (undviker logspam)
             static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
@@ -426,7 +450,7 @@ int main() {
                     buffer[5] = gyro1;
                     buffer[6] = gyro2;
 
-                    write(i2c_styr_fd, buffer, PACKET_SIZE);
+                    if (!sim_motor) write(i2c_styr_fd, buffer, PACKET_SIZE);
                     log_verification(buffer, action);
                     printf("-> Manual Command Forwarded: '%c'\n", action);
                 }
@@ -448,7 +472,7 @@ int main() {
                 buffer[5] = gyro1;
                 buffer[6] = gyro2;
 
-                write(i2c_styr_fd, buffer, PACKET_SIZE);
+                if (!sim_motor) write(i2c_styr_fd, buffer, PACKET_SIZE);
                 log_verification(buffer, action);
                 printf("-> Manual Command Forwarded: '%c'\n", action);
             }
@@ -474,6 +498,9 @@ int main() {
                         nasta_beslut = beslut_hem[current_action_index + 1];
                     }
                     log_next_action = true;
+
+                    // I sim-läge: starta segmenttimern för att simulera körning till nästa korsning
+                    if (sim_sensor) sim_segment_timer = current_time_ms();
                 }
             } 
             else if (is_picking_up) {
@@ -498,17 +525,38 @@ int main() {
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
                         is_rotating = true;
                         action_timer_start = current_time_ms();
+                    } else if (sim_sensor) {
+                        // I sim-läge: starta segmenttimern för hemresans första segment
+                        sim_segment_timer = current_time_ms();
                     }
                     printf("\n-> PHASE CHANGE: Heading Home...\n");
                     log_next_action = true;
                 }
             } 
             else {
-                // NORMAL KÖRNING: Vi väntar på flaggan 'flags_korsning' från sensorn
-                if ((flags_korsning == 2 || flags_korsning == 1) && !korsning_aktiv) {
-                    korsning_aktiv    = 1;    // Markera att vi är inne i en korsning (debounce)
-                    flags_ny_korsning = 0;    // Rensa ny-korsning-flaggan
-                    
+                // --- KORSNINGSDETEKTION ---
+                // I sim-läge: simulera korsning efter SIM_SEGMENT_MS ms
+                // I riktigt läge: vänta på flaggan 'flags_korsning' från sensorn
+                bool intersection_triggered = false;
+
+                if (sim_sensor) {
+                    // Tidbaserad simulering: en korsning "nås" efter SIM_SEGMENT_MS millisekunder
+                    if (sim_segment_timer > 0 && (current_time_ms() - sim_segment_timer) >= SIM_SEGMENT_MS) {
+                        intersection_triggered = true;
+                        sim_segment_timer = 0; // Rensa timern, sätts igen vid nästa segment
+                    }
+                } else {
+                    // Riktigt läge: använd sensorflaggor
+                    if ((flags_korsning == 2 || flags_korsning == 1) && !korsning_aktiv) {
+                        intersection_triggered = true;
+                        korsning_aktiv    = 1;    // Debounce
+                        flags_ny_korsning = 0;
+                    } else if (flags_korsning == 0) {
+                        korsning_aktiv = 0; // Återställ debounce
+                    }
+                }
+
+                if (intersection_triggered) {
                     current_action_index++; // Gå vidare till nästa beslut i listan
                     aktivt_beslut_fn(current_action_index);
                     action_timer_start = current_time_ms(); // Starta timer för eventuell rotation
@@ -540,16 +588,19 @@ int main() {
                                 0x05, current_auto_state, 0x00, 's', 
                                 line_var, gyro1, gyro2, 0xFF
                             };
-                            write(i2c_styr_fd, stop_packet, PACKET_SIZE);
+                            if (!sim_motor) write(i2c_styr_fd, stop_packet, PACKET_SIZE);
                         }
                     }
                     else {
                         // Normalt beslut (f = rakt fram): kör vidare utan rotation
                         log_next_action = true;
                     }
-                } 
-                else if (flags_korsning == 0) {
-                    korsning_aktiv = 0; // Vi har rullat helt av korsningen/markeringen, återställ debounce
+
+                    // I sim-läge: starta segmenttimern för nästa korsning
+                    // (om vi inte just startade en rotation — den har sin egen timer)
+                    if (sim_sensor && !is_rotating && !is_picking_up && aktivt_beslut != 'X') {
+                        sim_segment_timer = current_time_ms();
+                    }
                 }
             }
 
@@ -576,7 +627,7 @@ int main() {
                     0xFF      // Footer
                 };
 
-                write(i2c_styr_fd, auto_packet, PACKET_SIZE);
+                if (!sim_motor) write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 
                 // Skriv ut till konsolen första gången ett nytt beslut sätts
                 if (log_next_action) {
