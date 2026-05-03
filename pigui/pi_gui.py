@@ -5,9 +5,9 @@ import socket
 import struct
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QComboBox, QFrame, QGridLayout,
-                             QSizePolicy)
+                             QSizePolicy, QPushButton, QListWidget, QListWidgetItem)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QPoint
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 import os
 
 # Force low-latency FFmpeg flags
@@ -41,8 +41,8 @@ class TelemetryThread(QThread):
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
-                if len(data) == 10 and data[0] == 0x06 and data[9] == 0xFF:
-                    unpacked = struct.unpack('10B', data)
+                if len(data) == 12 and data[0] == 0x06 and data[11] == 0xFF:
+                    unpacked = struct.unpack('12B', data)
                     
                     telemetry_data = {
                         'phase': unpacked[1],
@@ -52,7 +52,9 @@ class TelemetryThread(QThread):
                         'gyro1': unpacked[5],
                         'gyro2': unpacked[6],
                         'flags': unpacked[7],
-                        'current_node': unpacked[8]
+                        'current_node': unpacked[8],
+                        'current_item': unpacked[9],
+                        'item_count': unpacked[10]
                     }
                     self.telemetry_signal.emit(telemetry_data)
             except socket.timeout:
@@ -68,13 +70,13 @@ class MapFrame(QFrame):
     def __init__(self, grid_nodes_ref, parent=None):
         super().__init__(parent)
         self.grid_nodes = grid_nodes_ref
-        self.highlighted_edge = None  # Tuple (node_a, node_b) for item location
+        self.highlighted_edges = []  # List of (node_a, node_b) tuples for item locations
         self.setStyleSheet("background-color: #1a252f; border: 2px solid #7f8c8d; border-radius: 5px;")
         self.setFixedSize(480, 480)
 
-    def set_item_edge(self, edge_tuple):
-        """Set the highlighted edge (item location) and repaint."""
-        self.highlighted_edge = edge_tuple
+    def set_item_edges(self, edges_list):
+        """Set the highlighted edges (item locations) and repaint."""
+        self.highlighted_edges = list(edges_list)
         self.update()
 
     def paintEvent(self, event):
@@ -112,14 +114,24 @@ class MapFrame(QFrame):
         p_0 = get_center(0)
         painter.drawLine(p_start, p_0)
 
-        # Draw highlighted edge (item location) on top in orange
-        if self.highlighted_edge:
-            a, b = self.highlighted_edge
-            if a in self.grid_nodes and b in self.grid_nodes:
-                highlight_pen = QPen(QColor("#e67e22"), 8)
-                highlight_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                painter.setPen(highlight_pen)
-                painter.drawLine(get_center(a), get_center(b))
+        # Draw highlighted edges (item locations) on top in orange with order numbers
+        if self.highlighted_edges:
+            highlight_pen = QPen(QColor("#e67e22"), 8)
+            highlight_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            number_font = QFont("Arial", 14, QFont.Weight.Bold)
+            painter.setFont(number_font)
+            
+            for idx, (a, b) in enumerate(self.highlighted_edges):
+                if a in self.grid_nodes and b in self.grid_nodes:
+                    p1 = get_center(a)
+                    p2 = get_center(b)
+                    painter.setPen(highlight_pen)
+                    painter.drawLine(p1, p2)
+                    
+                    # Draw order number at midpoint
+                    mid = QPoint((p1.x() + p2.x()) // 2, (p1.y() + p2.y()) // 2)
+                    painter.setPen(QPen(QColor("#ffffff")))
+                    painter.drawText(mid.x() - 6, mid.y() + 5, str(idx + 1))
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -205,16 +217,17 @@ class MainWindow(QMainWindow):
         # Gemensam stil för kontroll-etiketterna
         control_label_style = "font-size: 16px; font-weight: bold; padding-right: 5px; color: #ecf0f1;"
         combo_style = "background-color: #ecf0f1; color: #2c3e50; padding: 5px 10px; font-size: 14px; font-weight: bold; border-radius: 3px;"
+        btn_style = "background-color: #27ae60; color: white; font-weight: bold; padding: 5px 12px; border-radius: 3px; font-size: 13px;"
+        btn_remove_style = "background-color: #c0392b; color: white; font-weight: bold; padding: 5px 12px; border-radius: 3px; font-size: 13px;"
 
         # 1. State Selector
         lbl_state = QLabel("State:")
         lbl_state.setStyleSheet(control_label_style)
-        # Sätt en fast storlek på etiketten så den inte sprider ut sig
         lbl_state.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed) 
         
         self.state_combo = QComboBox()
         self.state_combo.setStyleSheet(combo_style)
-        self.state_combo.setMinimumWidth(200) # Gör rullgardinen lite bredare
+        self.state_combo.setMinimumWidth(200)
         self.state_combo.addItem("1: (Auto, Auto)", 0)
         self.state_combo.addItem("2: (Auto, Manual)", 1)
         self.state_combo.addItem("3: (Manual, Auto)", 2)
@@ -225,41 +238,9 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(lbl_state)
         self.control_layout.addWidget(self.state_combo)
         
-        # Lägg till ett fjäder-element (spacer) i mitten för att trycka isär State och Target lite snyggt
         self.control_layout.addStretch()
 
-        # 2. Item Location Selector
-        lbl_item = QLabel("Item:")
-        lbl_item.setStyleSheet(control_label_style)
-        lbl_item.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-        self.item_combo = QComboBox()
-        self.item_combo.setStyleSheet(combo_style)
-        self.item_combo.setMinimumWidth(120)
-
-        # Populate with all valid edges in the 5x5 grid
-        for i in range(25):
-            kol = i % 5
-            rad = i // 5
-            if kol < 4:  # Horizontal edge: i <-> i+1
-                self.item_combo.addItem(f"{i} ↔ {i+1}", (i, i+1))
-            if rad < 4:  # Vertical edge: i <-> i+5
-                self.item_combo.addItem(f"{i} ↔ {i+5}", (i, i+5))
-
-        # Default to edge 10 <-> 11 (matches previous hardcoded value)
-        default_idx = self.item_combo.findText("10 ↔ 11")
-        if default_idx >= 0:
-            self.item_combo.setCurrentIndex(default_idx)
-
-        self.item_combo.currentIndexChanged.connect(self.on_item_location_changed)
-        self.item_combo.currentIndexChanged.connect(lambda: self.setFocus())
-
-        self.control_layout.addWidget(lbl_item)
-        self.control_layout.addWidget(self.item_combo)
-
-        self.control_layout.addStretch()
-
-        # 3. Target Selector
+        # 2. Target Selector
         lbl_target = QLabel("Target:")
         lbl_target.setStyleSheet(control_label_style)
         lbl_target.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -274,11 +255,79 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(lbl_target)
         self.control_layout.addWidget(self.target_combo)
 
+        # --- ITEM LIST PANEL ---
+        self.item_panel_layout = QHBoxLayout()
+        self.item_panel_layout.setContentsMargins(50, 5, 50, 5)
+        self.layout.addLayout(self.item_panel_layout)
+
+        # Edge selector + Add button
+        item_left_layout = QVBoxLayout()
+        
+        lbl_add_item = QLabel("Add Item:")
+        lbl_add_item.setStyleSheet(control_label_style)
+        item_left_layout.addWidget(lbl_add_item)
+        
+        edge_add_layout = QHBoxLayout()
+        self.edge_combo = QComboBox()
+        self.edge_combo.setStyleSheet(combo_style)
+        self.edge_combo.setMinimumWidth(100)
+        for i in range(25):
+            kol = i % 5
+            rad = i // 5
+            if kol < 4:
+                self.edge_combo.addItem(f"{i} ↔ {i+1}", (i, i+1))
+            if rad < 4:
+                self.edge_combo.addItem(f"{i} ↔ {i+5}", (i, i+5))
+        self.edge_combo.currentIndexChanged.connect(lambda: self.setFocus())
+        
+        self.btn_add = QPushButton("Add")
+        self.btn_add.setStyleSheet(btn_style)
+        self.btn_add.clicked.connect(self.add_item_edge)
+        
+        edge_add_layout.addWidget(self.edge_combo)
+        edge_add_layout.addWidget(self.btn_add)
+        item_left_layout.addLayout(edge_add_layout)
+        self.item_panel_layout.addLayout(item_left_layout)
+
+        # Item list display
+        item_right_layout = QVBoxLayout()
+        lbl_items = QLabel("Pickup Order:")
+        lbl_items.setStyleSheet(control_label_style)
+        item_right_layout.addWidget(lbl_items)
+        
+        self.item_list_widget = QListWidget()
+        self.item_list_widget.setStyleSheet(
+            "background-color: #34495e; color: #ecf0f1; font-size: 14px; "
+            "font-weight: bold; border-radius: 3px; padding: 3px;"
+        )
+        self.item_list_widget.setMaximumHeight(80)
+        self.item_list_widget.setMinimumWidth(300)
+        item_right_layout.addWidget(self.item_list_widget)
+        
+        # Remove + Clear buttons
+        item_btn_layout = QHBoxLayout()
+        self.btn_remove = QPushButton("Remove")
+        self.btn_remove.setStyleSheet(btn_remove_style)
+        self.btn_remove.clicked.connect(self.remove_selected_item)
+        
+        self.btn_clear = QPushButton("Clear All")
+        self.btn_clear.setStyleSheet(btn_remove_style)
+        self.btn_clear.clicked.connect(self.clear_item_list)
+        
+        item_btn_layout.addWidget(self.btn_remove)
+        item_btn_layout.addWidget(self.btn_clear)
+        item_btn_layout.addStretch()
+        item_right_layout.addLayout(item_btn_layout)
+        self.item_panel_layout.addLayout(item_right_layout)
+
+        # Internal item edge list
+        self.item_edges = []
+
         # Instructions Label
         self.inst_label = QLabel(
             "HOTKEYS -> STATE: [1-4] | TARGET: [W]heel, [A]rm\n"
             "WHEEL: Arrows (Move), 'S' (Stop), 'E' (CW), 'O' (CCW)  |  ARM: 'V' (Left), 'H' (Right)\n"
-            "Press UP ARROW in Auto mode to start autonomous run with selected item location"
+            "Press UP ARROW in Auto mode to start autonomous run with item list"
         )
         self.inst_label.setStyleSheet("color: #bdc3c7; font-size: 14px; font-weight: bold; margin-top: 10px;")
         self.layout.addWidget(self.inst_label, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -294,8 +343,9 @@ class MainWindow(QMainWindow):
         self.lbl_line = QLabel("Line: 0")
         self.lbl_gyro = QLabel("Gyro: (0, 0)")
         self.lbl_flags = QLabel("Flags: 0")
+        self.lbl_items_progress = QLabel("Items: -")
         
-        for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action, self.lbl_line, self.lbl_gyro, self.lbl_flags]:
+        for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action, self.lbl_line, self.lbl_gyro, self.lbl_flags, self.lbl_items_progress]:
             lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; padding: 5px;")
             self.dashboard_layout.addWidget(lbl)
             
@@ -312,14 +362,39 @@ class MainWindow(QMainWindow):
 
         self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME"}
 
-        # Set initial item edge highlight on map
-        self.on_item_location_changed()
+        # Set initial map state
+        self.update_map_highlights()
 
-    def on_item_location_changed(self):
-        """Update the map highlight when the item location combo changes."""
-        edge = self.item_combo.currentData()
-        if edge:
-            self.map_frame.set_item_edge(edge)
+    # --- ITEM LIST MANAGEMENT ---
+    def add_item_edge(self):
+        edge = self.edge_combo.currentData()
+        if edge and edge not in self.item_edges:
+            self.item_edges.append(edge)
+            self.refresh_item_list_widget()
+            self.update_map_highlights()
+        self.setFocus()
+
+    def remove_selected_item(self):
+        row = self.item_list_widget.currentRow()
+        if 0 <= row < len(self.item_edges):
+            self.item_edges.pop(row)
+            self.refresh_item_list_widget()
+            self.update_map_highlights()
+        self.setFocus()
+
+    def clear_item_list(self):
+        self.item_edges.clear()
+        self.refresh_item_list_widget()
+        self.update_map_highlights()
+        self.setFocus()
+
+    def refresh_item_list_widget(self):
+        self.item_list_widget.clear()
+        for idx, (u, v) in enumerate(self.item_edges):
+            self.item_list_widget.addItem(f"  {idx+1}. Edge {u} ↔ {v}")
+
+    def update_map_highlights(self):
+        self.map_frame.set_item_edges(self.item_edges)
 
     def update_telemetry_dashboard(self, data):
         phase_str = self.phase_names.get(data['phase'], "UNKNOWN")
@@ -329,6 +404,14 @@ class MainWindow(QMainWindow):
         self.lbl_line.setText(f"Line: {data['line_var']}")
         self.lbl_gyro.setText(f"Gyro: ({data['gyro1']}, {data['gyro2']})")
         self.lbl_flags.setText(f"Flags: {data['flags']}")
+
+        # Item progress
+        item_idx = data.get('current_item', 0)
+        item_total = data.get('item_count', 0)
+        if item_total > 0:
+            self.lbl_items_progress.setText(f"Items: {min(item_idx+1, item_total)}/{item_total}")
+        else:
+            self.lbl_items_progress.setText("Items: -")
 
         # Uppdatera aktiv nod på kartan baserat på telemetridata
         node = data.get('current_node', 25)
@@ -388,6 +471,27 @@ class MainWindow(QMainWindow):
         if action_char:
             self.send_packet(action_char)
 
+    def send_item_list_packet(self):
+        """Send 0x07 item-list packet with all configured items."""
+        if not self.item_edges:
+            print("[!] No items to send")
+            return
+        
+        n = len(self.item_edges)
+        # Header (0x07) + count (N) + N*(u, v) + footer (0xFF)
+        fmt = 'B' * (3 + 2 * n)
+        values = [0x07, n]
+        for u, v in self.item_edges:
+            values.extend([u, v])
+        values.append(0xFF)
+        
+        packet = struct.pack(fmt, *values)
+        try:
+            self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
+            print(f"[ITEMS] Sent {n} item(s) to robot")
+        except Exception as e:
+            print(f"Error sending item list: {e}")
+
     def send_packet(self, action_char):
         current_state = self.state_combo.currentData()
         current_target = self.target_combo.currentData()
@@ -395,22 +499,17 @@ class MainWindow(QMainWindow):
         target_byte = 0x00 if current_target == "wheel" else 0x01
         action_byte = ord(str(action_char)[0])
 
-        # In auto modes (state 0 or 1), embed the item location in bytes 4-5
-        # so that the robot knows where the item is when it receives the start command.
-        item_u = 0x00
-        item_v = 0x00
-        if current_state in (0x00, 0x01):
-            edge = self.item_combo.currentData()
-            if edge:
-                item_u, item_v = edge
+        # In auto modes, send item list before start command
+        if current_state in (0x00, 0x01) and action_char == 'f' and self.item_edges:
+            self.send_item_list_packet()
 
         packet = struct.pack('BBBBBBBB',
                              0x05,           
                              current_state,  
                              target_byte,    
                              action_byte,    
-                             item_u,         
-                             item_v,         
+                             0x00,           
+                             0x00,           
                              0x00,           
                              0xFF)           
         

@@ -18,6 +18,7 @@
 #define START 25 // Start/slut på nod 25
 #define NONE -1  // Betyder att det inte finns en föregående nod
 #define STOP -1  // Stoppvillkor för ruttarray
+#define MAX_ITEMS 20 // Max antal varor per körning
 
 // --- TELEMETRY DEFINITIONS ---
 #define UDP_PORT 5001           // Porten som används för kommunikation med persondatorn
@@ -39,6 +40,14 @@ int  rutt_hem[NODES];                  // Nodnummer-sekvens hem från varan
 char beslut_till_vara[NODES];          // Beslutslista (f/e/o/u/X) för varuresa
 char beslut_hem[NODES];                // Beslutslista (f/e/o/u/X) för hemresa
 int  vara_u, vara_v;                   // De två noderna som varan befinner sig mellan
+
+// --- MULTI-ITEM GLOBALS ---
+uint8_t item_list_u[MAX_ITEMS];  // Nod U för varje vara
+uint8_t item_list_v[MAX_ITEMS];  // Nod V för varje vara
+int item_count         = 0;      // Antal varor mottagna från GUI
+int current_item_index = 0;      // Vilken vara vi jobbar med just nu (0-baserat)
+int pickup_ingang, pickup_utgang; // Ingångs-/utgångsnod vid senaste pickup
+char dir_vid_vara;                // Riktning vid varan (ingang→utgang)
 
 // --- STATE MACHINE GLOBALS ---
 typedef enum {
@@ -190,56 +199,96 @@ int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
     return kostnad[mal]; // Returnera total kostnad till målet
 }
 
-void planera_hela_resan(int nuvarande_nod, char nuvarande_dir) { 
-    int rutt_alt1[NODES], rutt_alt2[NODES]; 
+// Planerar rutt från from_node till varan (vara_u/vara_v).
+// Fyller rutt_till_vara, beslut_till_vara.
+// Sparar pickup_ingang, pickup_utgang, dir_vid_vara.
+void planera_till_vara(int from_node, char from_dir) {
+    int rutt_alt1[NODES], rutt_alt2[NODES];
 
-    // Beräkna kostnad till bägge sidor av varan för att avgöra ingångssida
-    int kostnad1 = hitta_rutt(nuvarande_nod, vara_u, rutt_alt1, nuvarande_dir);
-    int kostnad2 = hitta_rutt(nuvarande_nod, vara_v, rutt_alt2, nuvarande_dir);
-    
-    // Välj ingångsnod (närmast robot) och utgångsnod (andra sidan varan)
-    int ingang, utgang;
+    int kostnad1 = hitta_rutt(from_node, vara_u, rutt_alt1, from_dir);
+    int kostnad2 = hitta_rutt(from_node, vara_v, rutt_alt2, from_dir);
+
     if (kostnad1 <= kostnad2) {
-        ingang = vara_u; utgang = vara_v; // vara_u är närmast, kör dit först
-        memcpy(rutt_till_vara, rutt_alt1, sizeof(rutt_alt1)); 
+        pickup_ingang = vara_u; pickup_utgang = vara_v;
+        memcpy(rutt_till_vara, rutt_alt1, sizeof(rutt_alt1));
     } else {
-        ingang = vara_v; utgang = vara_u; // vara_v är närmast, kör dit först
+        pickup_ingang = vara_v; pickup_utgang = vara_u;
         memcpy(rutt_till_vara, rutt_alt2, sizeof(rutt_alt2));
     }
 
-    // Lägg till utgångsnoden sist i rutten (roboten kör igenom varan)
     int i = 0;
     while (rutt_till_vara[i] != STOP) i++;
-    rutt_till_vara[i]   = utgang;
+    rutt_till_vara[i]   = pickup_utgang;
     rutt_till_vara[i+1] = STOP;
 
-    bygg_beslut(rutt_till_vara, nuvarande_dir, beslut_till_vara); // Bygg beslutslista för varuresa
-    
-    char dir_vid_vara = nodriktningsmatris[ingang][utgang]; // Riktning roboten har efter pickup
-    char dir_efter_vanding = get_motsatt_dir(dir_vid_vara); // Riktning OM vi vänder 180 grader
-    
-    int cost_utgang  = hitta_rutt(utgang, START, rutt_alt1, dir_vid_vara); // Hem från utgång
-    int cost_ingang  = hitta_rutt(ingang, START, rutt_alt2, dir_efter_vanding) + 100; // Hem från ingång 
+    bygg_beslut(rutt_till_vara, from_dir, beslut_till_vara);
+    dir_vid_vara = nodriktningsmatris[pickup_ingang][pickup_utgang];
+}
 
-    if (cost_utgang <= cost_ingang) {
-        // Kör hem från utgångssidan, ingen vändning behövs
+// Planerar hem från pickup-position till START.
+// Fyller rutt_hem, beslut_hem (med 'f' eller 'u' prefix).
+void planera_hem_fran_pickup() {
+    int rutt_alt1[NODES], rutt_alt2[NODES];
+    char dir_efter_vanding = get_motsatt_dir(dir_vid_vara);
+
+    int cost_fwd = hitta_rutt(pickup_utgang, START, rutt_alt1, dir_vid_vara);
+    int cost_utn = hitta_rutt(pickup_ingang, START, rutt_alt2, dir_efter_vanding) + 100;
+
+    if (cost_fwd <= cost_utn) {
         memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
         bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
-        
-        // Lägg till 'f' först så att roboten kör fram till nästa korsning!
         int len = strlen(beslut_hem) + 1;
         memmove(&beslut_hem[1], &beslut_hem[0], len);
-        beslut_hem[0] = 'f'; 
+        beslut_hem[0] = 'f';
     } else {
-        // Kör hem från ingångssidan, lägg till 'u' (u-sväng) först i beslutslistan
         memcpy(rutt_hem, rutt_alt2, sizeof(rutt_alt2));
         bygg_beslut(rutt_hem, dir_efter_vanding, beslut_hem);
-        
-        // Prefixera med u-sväng
         int len = strlen(beslut_hem) + 1;
         memmove(&beslut_hem[1], &beslut_hem[0], len);
-        beslut_hem[0] = 'u'; 
+        beslut_hem[0] = 'u';
     }
+}
+
+// Planerar från pickup-position till nästa vara.
+// Fyller beslut_till_vara (med 'f'/'u' prefix), uppdaterar pickup_ingang/utgang/dir.
+void planera_nasta_vara() {
+    int rutt_tmp[NODES];
+    char dir_efter_vanding = get_motsatt_dir(dir_vid_vara);
+
+    // Testa 4 kombinationer: (exit fwd/utn) × (approach vara_u/vara_v)
+    int costs[4];
+    costs[0] = hitta_rutt(pickup_utgang, vara_u, rutt_tmp, dir_vid_vara);
+    costs[1] = hitta_rutt(pickup_utgang, vara_v, rutt_tmp, dir_vid_vara);
+    costs[2] = hitta_rutt(pickup_ingang, vara_u, rutt_tmp, dir_efter_vanding) + 100;
+    costs[3] = hitta_rutt(pickup_ingang, vara_v, rutt_tmp, dir_efter_vanding) + 100;
+
+    int best = 0;
+    for (int i = 1; i < 4; i++) { if (costs[i] < costs[best]) best = i; }
+
+    bool uturn  = (best >= 2);
+    int from_node = uturn ? pickup_ingang : pickup_utgang;
+    char from_dir = uturn ? dir_efter_vanding : dir_vid_vara;
+    int approach  = (best % 2 == 0) ? vara_u : vara_v;
+    int through   = (approach == vara_u) ? vara_v : vara_u;
+
+    // Planera rutt från exit-nod till approach-nod
+    hitta_rutt(from_node, approach, rutt_till_vara, from_dir);
+    int i = 0;
+    while (rutt_till_vara[i] != STOP) i++;
+    rutt_till_vara[i]   = through;
+    rutt_till_vara[i+1] = STOP;
+
+    bygg_beslut(rutt_till_vara, from_dir, beslut_till_vara);
+
+    // Prefixera med 'f' eller 'u'
+    int len = strlen(beslut_till_vara) + 1;
+    memmove(&beslut_till_vara[1], &beslut_till_vara[0], len);
+    beslut_till_vara[0] = uturn ? 'u' : 'f';
+
+    // Uppdatera pickup-info för denna nya vara
+    pickup_ingang = approach;
+    pickup_utgang = through;
+    dir_vid_vara  = nodriktningsmatris[approach][through];
 }
 
 // =================================================================
@@ -281,39 +330,39 @@ void aktivt_beslut_fn(int index) {
     }
 }
 
-void start_autonomous_sequence(unsigned char state, uint8_t item_u, uint8_t item_v) {
-    // Validera att nodparet är giltigt (inom gräns och angränsande)
-    if (item_u >= NODES || item_v >= NODES || !vag[item_u][item_v]) {
-        printf("[!] Invalid item location (%d, %d). Ignoring start.\n", item_u, item_v);
+void start_autonomous_sequence(unsigned char state) {
+    if (item_count <= 0) {
+        printf("[!] No items configured. Send item list (0x07) first.\n");
         return;
     }
 
-    vara_u = item_u; // Varans ena sida (mottagen från GUI)
-    vara_v = item_v; // Varans andra sida (mottagen från GUI)
+    current_item_index = 0;
+    vara_u = item_list_u[0];
+    vara_v = item_list_v[0];
     
-    printf("\n=== CALCULATING AUTONOMOUS ROUTE (item between %d and %d) ===\n", vara_u, vara_v);
-    planera_hela_resan(START, 's'); // Planera hela resan från startnoden med söderlig riktning
+    printf("\n=== AUTONOMOUS ROUTE: %d item(s) to collect ===\n", item_count);
+    printf("-> Item 1/%d: edge %d <-> %d\n", item_count, vara_u, vara_v);
+    planera_till_vara(START, 's');
+    planera_hem_fran_pickup(); // Förberäkna hemrutt (kan ändras om fler varor finns)
     
-    current_auto_state   = state;         // Spara körläget (skickas med i varje paket)
-    current_phase        = PHASE_TO_ITEM; // Starta i "kör mot varan"-fasen
-    current_action_index = 0;             // Börja från beslut[0]
-    korsning_aktiv       = 0;             // Ingen aktiv korsning ännu
-    loop_counter         = 0; 
+    current_auto_state   = state;
+    current_phase        = PHASE_TO_ITEM;
+    current_action_index = 0;
+    korsning_aktiv       = 0;
+    loop_counter         = 0;
 
     aktivt_beslut_fn(current_action_index);
-    current_node = rutt_till_vara[0]; // Robotens startposition i rutten
+    current_node = rutt_till_vara[0];
 
-    // Om första beslutet är en rotation, starta rotationstimern direkt
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
         is_rotating = true;
-        action_timer_start = current_time_ms(); 
+        action_timer_start = current_time_ms();
     } else if (sim_sensor) {
-        // I sim-läge: starta segmenttimern för att simulera "kör till nästa korsning"
         sim_segment_timer = current_time_ms();
     }
 
-    log_next_action = true; 
-    printf("-> Route Calculated. Driving to item...\n");
+    log_next_action = true;
+    printf("-> Route Calculated. Driving to item 1/%d...\n", item_count);
     if (sim_sensor) printf("[SIM] Intersections will be triggered every %d ms\n", SIM_SEGMENT_MS);
 }
 
@@ -436,47 +485,62 @@ int main() {
 
         // Parsa inkomna paket: header 0x05, footer 0xFF, storlek PACKET_SIZE
         if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
-            unsigned char state  = buffer[1]; // Körläge: 0x00/0x01=auto, 0x02/0x03=manuell
-            unsigned char target = buffer[2]; // Målnod (används ej ännu)
-            char action          = (char)buffer[3]; // Kommando: f/e/o/u/s/v
+            unsigned char state  = buffer[1];
+            unsigned char target = buffer[2];
+            char action          = (char)buffer[3];
 
             if (state == 0x00 || state == 0x01) {
-                // AUTO-LÄGE: 'f' som start-kommando triggar autonomi, annars manuellt
                 if (action == 'f' && current_phase == PHASE_IDLE) {
-                    uint8_t item_u = buffer[4]; // Varans nod 1 (skickas av GUI i byte 4)
-                    uint8_t item_v = buffer[5]; // Varans nod 2 (skickas av GUI i byte 5)
-                    start_autonomous_sequence(state, item_u, item_v);
+                    start_autonomous_sequence(state);
                 } else {
-                    // Manuell styrning i auto-läge (t.ex. från GUI under test)
                     buffer[4] = line_var;
                     buffer[5] = gyro1;
                     buffer[6] = gyro2;
-
                     if (!sim_motor) write(i2c_styr_fd, buffer, PACKET_SIZE);
                     log_verification(buffer, action);
                     printf("-> Manual Command Forwarded: '%c'\n", action);
                 }
             } else if (state == 0x02 || state == 0x03) {
-                // MANUELLT LÄGE: avbryt eventuell pågående autonom körning
                 if (current_phase != PHASE_IDLE) {
                     printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
                     current_phase        = PHASE_IDLE;
                     is_rotating          = false;
                     is_picking_up        = false;
-                    current_action_index = 0; 
-                    korsning_aktiv       = 0;       
-                    aktivt_beslut        = 's'; // Stoppa motorn
-                    nasta_beslut         = 's'; // Rensa GUI-förhandsvisning
+                    current_action_index = 0;
+                    korsning_aktiv       = 0;
+                    aktivt_beslut        = 's';
+                    nasta_beslut         = 's';
                 }
-                
-                // Fyll på sensordata och vidarebefordra paketet till motorstyrningen
                 buffer[4] = line_var;
                 buffer[5] = gyro1;
                 buffer[6] = gyro2;
-
                 if (!sim_motor) write(i2c_styr_fd, buffer, PACKET_SIZE);
                 log_verification(buffer, action);
                 printf("-> Manual Command Forwarded: '%c'\n", action);
+            }
+        }
+
+        // Parsa item-list paket: header 0x07
+        if (n >= 4 && buffer[0] == 0x07) {
+            int num = buffer[1];
+            int expected_len = 3 + 2 * num; // header + count + N*(u,v) + footer
+            if (num > 0 && num <= MAX_ITEMS && n == expected_len && buffer[n-1] == 0xFF) {
+                item_count = 0;
+                for (int i = 0; i < num; i++) {
+                    uint8_t iu = buffer[2 + 2*i];
+                    uint8_t iv = buffer[3 + 2*i];
+                    if (iu < NODES && iv < NODES && vag[iu][iv]) {
+                        item_list_u[item_count] = iu;
+                        item_list_v[item_count] = iv;
+                        item_count++;
+                    } else {
+                        printf("[!] Skipping invalid item edge (%d, %d)\n", iu, iv);
+                    }
+                }
+                current_item_index = 0;
+                printf("[ITEMS] Received %d valid item(s) from GUI\n", item_count);
+            } else {
+                printf("[!] Invalid item-list packet (n=%d, count=%d)\n", n, num);
             }
         }
 
@@ -511,28 +575,58 @@ int main() {
                 // Steg 1 (efter 10s): skicka pickup-kommando 'v' till mekaniken
                 if (elapsed_in_state >= 10000 && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
-                    nasta_beslut  = beslut_hem[0]; // Visar om nästa steg är 'f' eller 'u'
+                    // Förhandsvisning: nästa steg beror på om fler varor finns
+                    if (current_item_index + 1 < item_count) {
+                        nasta_beslut = 'f'; // Nästa vara
+                    } else {
+                        nasta_beslut = beslut_hem[0]; // Hem
+                    }
                     log_next_action = true;
                 }
-                // Steg 2 (efter 20s): pickup klar (10s har gått med 'v' aktivt), byt fas till hemkörning
+                // Steg 2 (efter 20s): pickup klar, avgör nästa fas
                 else if (elapsed_in_state >= 20000) {
-                    is_picking_up        = false;
-                    current_phase        = PHASE_TO_HOME;
-                    current_action_index = 0; // Börja från index 0 i beslut_hem
+                    is_picking_up = false;
+                    current_item_index++;
 
-                    // Ladda in första beslutet för hemresan (antingen 'f' eller 'u')
-                    aktivt_beslut_fn(current_action_index);
+                    if (current_item_index < item_count) {
+                        // === FLER VAROR: planera rutt till nästa vara ===
+                        vara_u = item_list_u[current_item_index];
+                        vara_v = item_list_v[current_item_index];
+                        printf("\n-> Item %d/%d: edge %d <-> %d\n",
+                               current_item_index + 1, item_count, vara_u, vara_v);
+                        planera_nasta_vara();
+                        // Förberäkna hemrutt från nästa pickup (för GUI-förhandsvisning)
+                        planera_hem_fran_pickup();
 
-                    // Om hemruttens första beslut är en rotation ('u' etc):
-                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
-                        is_rotating = true;
-                        action_timer_start = current_time_ms();
-                    } else if (sim_sensor) {
-                        // I sim-läge: starta segmenttimern för hemresans första segment
-                        sim_segment_timer = current_time_ms();
+                        current_phase        = PHASE_TO_ITEM;
+                        current_action_index = 0;
+                        aktivt_beslut_fn(current_action_index);
+
+                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                            is_rotating = true;
+                            action_timer_start = current_time_ms();
+                        } else if (sim_sensor) {
+                            sim_segment_timer = current_time_ms();
+                        }
+                        printf("-> PHASE CHANGE: Driving to item %d/%d...\n",
+                               current_item_index + 1, item_count);
+                        log_next_action = true;
+                    } else {
+                        // === SISTA VARAN PLOCKAD: kör hem ===
+                        planera_hem_fran_pickup();
+                        current_phase        = PHASE_TO_HOME;
+                        current_action_index = 0;
+                        aktivt_beslut_fn(current_action_index);
+
+                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                            is_rotating = true;
+                            action_timer_start = current_time_ms();
+                        } else if (sim_sensor) {
+                            sim_segment_timer = current_time_ms();
+                        }
+                        printf("\n-> PHASE CHANGE: All %d items collected. Heading Home...\n", item_count);
+                        log_next_action = true;
                     }
-                    printf("\n-> PHASE CHANGE: Heading Home...\n");
-                    log_next_action = true;
                 }
             } 
             else {
@@ -576,14 +670,16 @@ int main() {
                         log_next_action = true;
                     }
                     else if (aktivt_beslut == 'X') {
-                        // Slutmarkering nådd: byt fas eller avsluta
                         if (current_phase == PHASE_TO_ITEM) {
-                            // Vi är framme vid varan, starta pickup-sekvens
-                            current_phase = PHASE_PICKUP; 
-                            aktivt_beslut = 's';           // Stoppa roboten
-                            nasta_beslut  = beslut_hem[0]; // Nästa är hemruttens start
+                            current_phase = PHASE_PICKUP;
+                            aktivt_beslut = 's';
+                            if (current_item_index + 1 < item_count) {
+                                nasta_beslut = 'f';
+                            } else {
+                                nasta_beslut = beslut_hem[0];
+                            }
                             is_picking_up = true;
-                            printf("\n-> PHASE CHANGE: Stopping before pickup...\n");
+                            printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
                             log_next_action = true;
                         }
                         else if (current_phase == PHASE_TO_HOME) {
@@ -662,7 +758,7 @@ int main() {
         if (gui_known) {
             telemetry_counter++;
             if (telemetry_counter >= 50) { // 50 iterationer * 2ms = 100ms = 10 Hz
-                unsigned char telemetry_packet[(PACKET_SIZE+2)] = {
+                unsigned char telemetry_packet[(PACKET_SIZE+4)] = {
                     0x06,                         // 0x06 identifierar paketet som telemetri
                     (unsigned char)current_phase, // Aktuell fas i state machine
                     aktivt_beslut,                // Vad vi skickar till motorerna just nu
@@ -672,9 +768,11 @@ int main() {
                     gyro2,                        // Sensordata: Gyro 2
                     flags,                        // Sensordata: Råa flaggor (bitmaskade)
                     current_node,                 // Robotens aktuella nod (0-25)
+                    (unsigned char)current_item_index, // Vilken vara vi är på (0-baserat)
+                    (unsigned char)item_count,         // Totalt antal varor
                     0xFF                          // Footer
                 };
-                sendto(sockfd, telemetry_packet, (PACKET_SIZE+2), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+                sendto(sockfd, telemetry_packet, (PACKET_SIZE+4), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                 telemetry_counter = 0;
             }
         }
