@@ -41,8 +41,8 @@ class TelemetryThread(QThread):
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
-                if len(data) == 12 and data[0] == 0x06 and data[11] == 0xFF:
-                    unpacked = struct.unpack('12B', data)
+                if len(data) == 13 and data[0] == 0x06 and data[12] == 0xFF:
+                    unpacked = struct.unpack('13B', data)
                     
                     telemetry_data = {
                         'phase': unpacked[1],
@@ -54,7 +54,8 @@ class TelemetryThread(QThread):
                         'flags': unpacked[7],
                         'current_node': unpacked[8],
                         'current_item': unpacked[9],
-                        'item_count': unpacked[10]
+                        'item_count': unpacked[10],
+                        'direction': chr(unpacked[11])
                     }
                     self.telemetry_signal.emit(telemetry_data)
             except socket.timeout:
@@ -398,18 +399,27 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_items_progress.setText("Items: -")
 
-        # Uppdatera aktiv nod på kartan baserat på telemetridata
+        # Uppdatera aktiv nod och riktningspil på kartan
         node = data.get('current_node', 25)
-        if node != self.current_active_node:
-            self.set_active_node(node)
+        direction = data.get('direction', 's')
+        if node != self.current_active_node or direction != getattr(self, 'current_dir', 's'):
+            self.current_dir = direction
+            self.set_active_node(node, direction)
 
 
-    def set_active_node(self, node_id):
+    def set_active_node(self, node_id, direction='s'):
+        dir_arrows = {'n': '↑', 's': '↓', 'e': '→', 'w': '←'}
+        arrow = dir_arrows.get(direction, '')
+
         if self.current_active_node in self.grid_nodes:
-            self.grid_nodes[self.current_active_node].setStyleSheet(self.node_style_idle)
+            old_lbl = self.grid_nodes[self.current_active_node]
+            old_lbl.setStyleSheet(self.node_style_idle)
+            old_lbl.setText(str(self.current_active_node))
         
         if node_id in self.grid_nodes:
-            self.grid_nodes[node_id].setStyleSheet(self.node_style_active)
+            lbl = self.grid_nodes[node_id]
+            lbl.setStyleSheet(self.node_style_active)
+            lbl.setText(f"{arrow}")
             self.current_active_node = node_id
 
     # --- KEYBOARD LISTENER ---

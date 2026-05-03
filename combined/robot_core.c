@@ -81,6 +81,7 @@ char nasta_beslut  = 's'; // Nästa beslut i kön (index+1) – visas på GUI so
 char aktivt_beslut = 's'; // Det beslut som just nu skickas till motorstyrningen
 int  loop_counter  = 0;   // Generell loopräknare (används vid debug/timing)
 uint8_t current_node = START; // Vilken nod roboten befinner sig vid (skickas i telemetri till GUI)
+char current_dir = 's';       // Robotens aktuella körriktning: 'n','s','e','w'
 
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder
@@ -331,13 +332,28 @@ void log_sensor_data(const unsigned char *received) {
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
         aktivt_beslut = beslut_till_vara[index];
-        nasta_beslut  = beslut_till_vara[index + 1]; // +1 för GUI-förhandsvisning
+        // Om nuvarande är en rotation, nästa är alltid 'f' (kör till nästa korsning)
+        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+            nasta_beslut = 'f';
+        } else if (aktivt_beslut == 'X') {
+            nasta_beslut = 'v'; // Pickup kommer efter ankomst
+        } else {
+            nasta_beslut = beslut_till_vara[index + 1];
+        }
     } else if (current_phase == PHASE_PICKUP) {
         aktivt_beslut = 'v';
-        nasta_beslut  = beslut_hem[0]; // Nästa fas börjar med hemruttens första beslut
+        if (current_item_index + 1 < item_count) {
+            nasta_beslut = 'f'; // Nästa vara
+        } else {
+            nasta_beslut = beslut_hem[0];
+        }
     } else if (current_phase == PHASE_TO_HOME) {
         aktivt_beslut = beslut_hem[index];
-        nasta_beslut  = beslut_hem[index + 1]; // +1 för GUI-förhandsvisning
+        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+            nasta_beslut = 'f';
+        } else {
+            nasta_beslut = beslut_hem[index + 1];
+        }
     }
 }
 
@@ -364,6 +380,7 @@ void start_autonomous_sequence(unsigned char state) {
 
     aktivt_beslut_fn(current_action_index);
     current_node = rutt_till_vara[0];
+    current_dir  = 's'; // Startar med söderlig riktning från nod 25
 
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
         is_rotating = true;
@@ -668,11 +685,17 @@ int main() {
                     aktivt_beslut_fn(current_action_index);
                     action_timer_start = current_time_ms(); // Starta timer för eventuell rotation
 
-                    // Uppdatera aktuell nod baserat på rutten
+                    // Uppdatera aktuell nod och riktning baserat på rutten
                     if (current_phase == PHASE_TO_ITEM) {
                         current_node = rutt_till_vara[current_action_index];
+                        if (rutt_till_vara[current_action_index + 1] != STOP) {
+                            current_dir = nodriktningsmatris[rutt_till_vara[current_action_index]][rutt_till_vara[current_action_index + 1]];
+                        }
                     } else if (current_phase == PHASE_TO_HOME) {
                         current_node = rutt_hem[current_action_index];
+                        if (rutt_hem[current_action_index + 1] != STOP) {
+                            current_dir = nodriktningsmatris[rutt_hem[current_action_index]][rutt_hem[current_action_index + 1]];
+                        }
                     }
 
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
@@ -684,11 +707,7 @@ int main() {
                         if (current_phase == PHASE_TO_ITEM) {
                             current_phase = PHASE_PICKUP;
                             aktivt_beslut = 's';
-                            if (current_item_index + 1 < item_count) {
-                                nasta_beslut = 'f';
-                            } else {
-                                nasta_beslut = beslut_hem[0];
-                            }
+                            nasta_beslut  = 'v'; // Nästa steg är pickup-kommando
                             is_picking_up = true;
                             printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
                             log_next_action = true;
@@ -769,11 +788,11 @@ int main() {
         if (gui_known) {
             telemetry_counter++;
             if (telemetry_counter >= 50) { // 50 iterationer * 2ms = 100ms = 10 Hz
-                unsigned char telemetry_packet[(PACKET_SIZE+4)] = {
+                unsigned char telemetry_packet[(PACKET_SIZE+5)] = {
                     0x06,                         // 0x06 identifierar paketet som telemetri
                     (unsigned char)current_phase, // Aktuell fas i state machine
                     aktivt_beslut,                // Vad vi skickar till motorerna just nu
-                    nasta_beslut,                 // Nästa beslut (index+1, förhandsvisning för GUI)
+                    nasta_beslut,                 // Nästa beslut (förhandsvisning för GUI)
                     line_var,                     // Sensordata: Linje
                     gyro1,                        // Sensordata: Gyro 1
                     gyro2,                        // Sensordata: Gyro 2
@@ -781,9 +800,10 @@ int main() {
                     current_node,                 // Robotens aktuella nod (0-25)
                     (unsigned char)current_item_index, // Vilken vara vi är på (0-baserat)
                     (unsigned char)item_count,         // Totalt antal varor
+                    (unsigned char)current_dir,        // Körriktning: 'n','s','e','w'
                     0xFF                          // Footer
                 };
-                sendto(sockfd, telemetry_packet, (PACKET_SIZE+4), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+                sendto(sockfd, telemetry_packet, (PACKET_SIZE+5), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                 telemetry_counter = 0;
             }
         }
