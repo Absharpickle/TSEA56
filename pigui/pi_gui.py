@@ -41,8 +41,8 @@ class TelemetryThread(QThread):
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
-                if len(data) == 9 and data[0] == 0x06 and data[8] == 0xFF:
-                    unpacked = struct.unpack('9B', data)
+                if len(data) == 10 and data[0] == 0x06 and data[9] == 0xFF:
+                    unpacked = struct.unpack('10B', data)
                     
                     telemetry_data = {
                         'phase': unpacked[1],
@@ -51,7 +51,8 @@ class TelemetryThread(QThread):
                         'line_var': unpacked[4],
                         'gyro1': unpacked[5],
                         'gyro2': unpacked[6],
-                        'flags': unpacked[7]
+                        'flags': unpacked[7],
+                        'current_node': unpacked[8]
                     }
                     self.telemetry_signal.emit(telemetry_data)
             except socket.timeout:
@@ -329,8 +330,10 @@ class MainWindow(QMainWindow):
         self.lbl_gyro.setText(f"Gyro: ({data['gyro1']}, {data['gyro2']})")
         self.lbl_flags.setText(f"Flags: {data['flags']}")
 
-        if data['phase'] == 0 and self.current_active_node != 25:
-            self.set_active_node(25)
+        # Uppdatera aktiv nod på kartan baserat på telemetridata
+        node = data.get('current_node', 25)
+        if node != self.current_active_node:
+            self.set_active_node(node)
 
 
     def set_active_node(self, node_id):

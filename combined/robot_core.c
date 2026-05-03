@@ -71,6 +71,7 @@ int telemetry_counter = 0;     // Räknar loop-iterationer för 10 Hz telemetri-
 char nasta_beslut  = 's'; // Nästa beslut i kön (index+1) – visas på GUI som förhandsvisning
 char aktivt_beslut = 's'; // Det beslut som just nu skickas till motorstyrningen
 int  loop_counter  = 0;   // Generell loopräknare (används vid debug/timing)
+uint8_t current_node = START; // Vilken nod roboten befinner sig vid (skickas i telemetri till GUI)
 
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder
@@ -300,6 +301,7 @@ void start_autonomous_sequence(unsigned char state, uint8_t item_u, uint8_t item
     loop_counter         = 0; 
 
     aktivt_beslut_fn(current_action_index);
+    current_node = rutt_till_vara[0]; // Robotens startposition i rutten
 
     // Om första beslutet är en rotation, starta rotationstimern direkt
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
@@ -561,6 +563,13 @@ int main() {
                     aktivt_beslut_fn(current_action_index);
                     action_timer_start = current_time_ms(); // Starta timer för eventuell rotation
 
+                    // Uppdatera aktuell nod baserat på rutten
+                    if (current_phase == PHASE_TO_ITEM) {
+                        current_node = rutt_till_vara[current_action_index];
+                    } else if (current_phase == PHASE_TO_HOME) {
+                        current_node = rutt_hem[current_action_index];
+                    }
+
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
                         // is_rotating tvingar automatiskt fram 500ms 's' i paket-byggaren nedan
                         is_rotating = true;
@@ -580,6 +589,7 @@ int main() {
                         else if (current_phase == PHASE_TO_HOME) {
                             // Vi är hemma, avsluta autonom körning
                             current_phase = PHASE_IDLE;
+                            current_node  = START; // Tillbaka till startnoden
                             aktivt_beslut = 's'; // Stoppa roboten
                             nasta_beslut  = 's'; // Rensa GUI-förhandsvisning
                             printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
@@ -652,7 +662,7 @@ int main() {
         if (gui_known) {
             telemetry_counter++;
             if (telemetry_counter >= 50) { // 50 iterationer * 2ms = 100ms = 10 Hz
-                unsigned char telemetry_packet[(PACKET_SIZE+1)] = {
+                unsigned char telemetry_packet[(PACKET_SIZE+2)] = {
                     0x06,                         // 0x06 identifierar paketet som telemetri
                     (unsigned char)current_phase, // Aktuell fas i state machine
                     aktivt_beslut,                // Vad vi skickar till motorerna just nu
@@ -661,9 +671,10 @@ int main() {
                     gyro1,                        // Sensordata: Gyro 1
                     gyro2,                        // Sensordata: Gyro 2
                     flags,                        // Sensordata: Råa flaggor (bitmaskade)
+                    current_node,                 // Robotens aktuella nod (0-25)
                     0xFF                          // Footer
                 };
-                sendto(sockfd, telemetry_packet, (PACKET_SIZE+1), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+                sendto(sockfd, telemetry_packet, (PACKET_SIZE+2), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                 telemetry_counter = 0;
             }
         }
