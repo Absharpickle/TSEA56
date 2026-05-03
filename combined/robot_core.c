@@ -237,15 +237,22 @@ void planera_hem_fran_pickup() {
     if (cost_fwd <= cost_utn) {
         memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
         bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
-        int len = strlen(beslut_hem) + 1;
-        memmove(&beslut_hem[1], &beslut_hem[0], len);
+        // Prefixera beslut med 'f' och rutt med startnodens motpart
+        int dlen = strlen(beslut_hem) + 1;
+        memmove(&beslut_hem[1], &beslut_hem[0], dlen);
         beslut_hem[0] = 'f';
+        int rlen = 0; while (rutt_hem[rlen] != STOP) rlen++;
+        memmove(&rutt_hem[1], &rutt_hem[0], (rlen + 1) * sizeof(int));
+        rutt_hem[0] = pickup_ingang; // Roboten är vid ingang-sidan, kör framåt
     } else {
         memcpy(rutt_hem, rutt_alt2, sizeof(rutt_alt2));
         bygg_beslut(rutt_hem, dir_efter_vanding, beslut_hem);
-        int len = strlen(beslut_hem) + 1;
-        memmove(&beslut_hem[1], &beslut_hem[0], len);
+        int dlen = strlen(beslut_hem) + 1;
+        memmove(&beslut_hem[1], &beslut_hem[0], dlen);
         beslut_hem[0] = 'u';
+        int rlen = 0; while (rutt_hem[rlen] != STOP) rlen++;
+        memmove(&rutt_hem[1], &rutt_hem[0], (rlen + 1) * sizeof(int));
+        rutt_hem[0] = pickup_utgang; // Roboten är vid utgang-sidan, gör u-sväng
     }
 }
 
@@ -280,10 +287,14 @@ void planera_nasta_vara() {
 
     bygg_beslut(rutt_till_vara, from_dir, beslut_till_vara);
 
-    // Prefixera med 'f' eller 'u'
-    int len = strlen(beslut_till_vara) + 1;
-    memmove(&beslut_till_vara[1], &beslut_till_vara[0], len);
+    // Prefixera beslut med 'f'/'u' OCH rutt med startpositionen
+    int dlen = strlen(beslut_till_vara) + 1;
+    memmove(&beslut_till_vara[1], &beslut_till_vara[0], dlen);
     beslut_till_vara[0] = uturn ? 'u' : 'f';
+
+    int rlen = 0; while (rutt_till_vara[rlen] != STOP) rlen++;
+    memmove(&rutt_till_vara[1], &rutt_till_vara[0], (rlen + 1) * sizeof(int));
+    rutt_till_vara[0] = uturn ? pickup_utgang : pickup_ingang; // Var roboten befinner sig
 
     // Uppdatera pickup-info för denna nya vara
     pickup_ingang = approach;

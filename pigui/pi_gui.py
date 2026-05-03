@@ -148,42 +148,51 @@ class MainWindow(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
+        self.layout.setSpacing(5)
+        self.layout.setContentsMargins(10, 5, 10, 5)
 
         self.top_hlayout = QHBoxLayout()
+        self.top_hlayout.setSpacing(10)
         self.layout.addLayout(self.top_hlayout)
 
         self.image_label = QLabel(self)
-        self.image_label.setFixedSize(640, 480)
-        self.image_label.setStyleSheet("border: 3px solid #34495e; background-color: black;")
-        self.top_hlayout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setFixedSize(480, 360)
+        self.image_label.setStyleSheet("border: 2px solid #34495e; background-color: black;")
+        self.image_label.setScaledContents(True)
+        self.top_hlayout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignTop)
+
+        # --- RIGHT SIDE: Map + Items ---
+        right_vlayout = QVBoxLayout()
+        right_vlayout.setSpacing(5)
 
         # --- MAP SETUP ---
         self.grid_nodes = {} 
         self.current_active_node = 25 
         
         self.map_frame = MapFrame(self.grid_nodes)
+        self.map_frame.setFixedSize(360, 360)
         self.map_layout = QGridLayout(self.map_frame)
-        self.map_layout.setSpacing(15) 
+        self.map_layout.setSpacing(10) 
 
         self.node_style_idle = """
             background-color: #95a5a6; 
             color: black; 
             font-weight: bold; 
-            border-radius: 25px; 
-            font-size: 16px;
+            border-radius: 20px; 
+            font-size: 13px;
         """
         
         self.node_style_active = """
             background-color: #e74c3c; 
             color: white; 
             font-weight: bold; 
-            border-radius: 25px; 
-            font-size: 18px;
-            border: 3px solid #f1c40f;
+            border-radius: 20px; 
+            font-size: 14px;
+            border: 2px solid #f1c40f;
         """
 
         self.lbl_start = QLabel("25")
-        self.lbl_start.setFixedSize(50, 50)
+        self.lbl_start.setFixedSize(40, 40)
         self.lbl_start.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_start.setStyleSheet(self.node_style_active) 
         self.map_layout.addWidget(self.lbl_start, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -193,41 +202,90 @@ class MainWindow(QMainWindow):
             rad = (i // 5) + 1 
             kol = i % 5
             lbl = QLabel(str(i))
-            lbl.setFixedSize(50, 50)
+            lbl.setFixedSize(40, 40)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(self.node_style_idle)
             self.map_layout.addWidget(lbl, rad, kol, alignment=Qt.AlignmentFlag.AlignCenter)
             self.grid_nodes[i] = lbl
 
-        self.top_hlayout.addWidget(self.map_frame, alignment=Qt.AlignmentFlag.AlignCenter)
+        right_vlayout.addWidget(self.map_frame, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # --- TELEMETRY SETUP ---
-        self.pi_ip = "192.168.1.50" # BYT TILL DIN PI:S IP
+        self.pi_ip = "192.168.1.50"
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.control_sock.bind(("0.0.0.0", 0)) 
 
-        # --- CONTROL PANEL ---
-        # Stramat upp layouten för kontrollerna
+        # Gemensam stil
+        control_label_style = "font-size: 13px; font-weight: bold; color: #ecf0f1;"
+        combo_style = "background-color: #ecf0f1; color: #2c3e50; padding: 3px 6px; font-size: 12px; font-weight: bold; border-radius: 3px;"
+        btn_style = "background-color: #27ae60; color: white; font-weight: bold; padding: 3px 8px; border-radius: 3px; font-size: 12px;"
+        btn_remove_style = "background-color: #c0392b; color: white; font-weight: bold; padding: 3px 8px; border-radius: 3px; font-size: 12px;"
+
+        # --- ITEM PANEL (under the map, inside right column) ---
+        item_hlayout = QHBoxLayout()
+        item_hlayout.setSpacing(6)
+
+        self.edge_combo = QComboBox()
+        self.edge_combo.setStyleSheet(combo_style)
+        self.edge_combo.setMinimumWidth(80)
+        for i in range(25):
+            kol = i % 5
+            rad = i // 5
+            if kol < 4:
+                self.edge_combo.addItem(f"{i}↔{i+1}", (i, i+1))
+            if rad < 4:
+                self.edge_combo.addItem(f"{i}↔{i+5}", (i, i+5))
+        self.edge_combo.currentIndexChanged.connect(lambda: self.setFocus())
+
+        self.btn_add = QPushButton("+")
+        self.btn_add.setStyleSheet(btn_style)
+        self.btn_add.setFixedWidth(30)
+        self.btn_add.clicked.connect(self.add_item_edge)
+
+        self.item_list_widget = QListWidget()
+        self.item_list_widget.setStyleSheet(
+            "background-color: #34495e; color: #ecf0f1; font-size: 12px; "
+            "font-weight: bold; border-radius: 3px; padding: 2px;"
+        )
+        self.item_list_widget.setMaximumHeight(55)
+        self.item_list_widget.setMinimumWidth(160)
+
+        self.btn_remove = QPushButton("−")
+        self.btn_remove.setStyleSheet(btn_remove_style)
+        self.btn_remove.setFixedWidth(30)
+        self.btn_remove.clicked.connect(self.remove_selected_item)
+
+        self.btn_clear = QPushButton("Clr")
+        self.btn_clear.setStyleSheet(btn_remove_style)
+        self.btn_clear.setFixedWidth(35)
+        self.btn_clear.clicked.connect(self.clear_item_list)
+
+        item_hlayout.addWidget(self.edge_combo)
+        item_hlayout.addWidget(self.btn_add)
+        item_hlayout.addWidget(self.item_list_widget, 1)
+        item_hlayout.addWidget(self.btn_remove)
+        item_hlayout.addWidget(self.btn_clear)
+
+        right_vlayout.addLayout(item_hlayout)
+        self.top_hlayout.addLayout(right_vlayout)
+
+        # Internal item edge list
+        self.item_edges = []
+
+        # --- CONTROL PANEL (single compact row) ---
         self.control_layout = QHBoxLayout()
-        self.control_layout.setSpacing(10) # Minskar avståndet mellan widgets
-        self.control_layout.setContentsMargins(50, 10, 50, 10) # Lägger till lite luft på sidorna
+        self.control_layout.setSpacing(8)
+        self.control_layout.setContentsMargins(20, 3, 20, 3)
         self.layout.addLayout(self.control_layout)
 
-        # Gemensam stil för kontroll-etiketterna
-        control_label_style = "font-size: 16px; font-weight: bold; padding-right: 5px; color: #ecf0f1;"
-        combo_style = "background-color: #ecf0f1; color: #2c3e50; padding: 5px 10px; font-size: 14px; font-weight: bold; border-radius: 3px;"
-        btn_style = "background-color: #27ae60; color: white; font-weight: bold; padding: 5px 12px; border-radius: 3px; font-size: 13px;"
-        btn_remove_style = "background-color: #c0392b; color: white; font-weight: bold; padding: 5px 12px; border-radius: 3px; font-size: 13px;"
-
-        # 1. State Selector
         lbl_state = QLabel("State:")
         lbl_state.setStyleSheet(control_label_style)
-        lbl_state.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed) 
+        lbl_state.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         
         self.state_combo = QComboBox()
         self.state_combo.setStyleSheet(combo_style)
-        self.state_combo.setMinimumWidth(200)
+        self.state_combo.setMinimumWidth(160)
         self.state_combo.addItem("1: (Auto, Auto)", 0)
         self.state_combo.addItem("2: (Auto, Manual)", 1)
         self.state_combo.addItem("3: (Manual, Auto)", 2)
@@ -237,105 +295,32 @@ class MainWindow(QMainWindow):
         
         self.control_layout.addWidget(lbl_state)
         self.control_layout.addWidget(self.state_combo)
-        
         self.control_layout.addStretch()
 
-        # 2. Target Selector
         lbl_target = QLabel("Target:")
         lbl_target.setStyleSheet(control_label_style)
         lbl_target.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         self.target_combo = QComboBox()
         self.target_combo.setStyleSheet(combo_style)
-        self.target_combo.setMinimumWidth(150)
+        self.target_combo.setMinimumWidth(100)
         self.target_combo.addItem("Wheel", "wheel")
         self.target_combo.addItem("Arm", "arm")
         self.target_combo.currentIndexChanged.connect(lambda: self.setFocus())
         
         self.control_layout.addWidget(lbl_target)
         self.control_layout.addWidget(self.target_combo)
+        self.control_layout.addStretch()
 
-        # --- ITEM LIST PANEL ---
-        self.item_panel_layout = QHBoxLayout()
-        self.item_panel_layout.setContentsMargins(50, 5, 50, 5)
-        self.layout.addLayout(self.item_panel_layout)
-
-        # Edge selector + Add button
-        item_left_layout = QVBoxLayout()
-        
-        lbl_add_item = QLabel("Add Item:")
-        lbl_add_item.setStyleSheet(control_label_style)
-        item_left_layout.addWidget(lbl_add_item)
-        
-        edge_add_layout = QHBoxLayout()
-        self.edge_combo = QComboBox()
-        self.edge_combo.setStyleSheet(combo_style)
-        self.edge_combo.setMinimumWidth(100)
-        for i in range(25):
-            kol = i % 5
-            rad = i // 5
-            if kol < 4:
-                self.edge_combo.addItem(f"{i} ↔ {i+1}", (i, i+1))
-            if rad < 4:
-                self.edge_combo.addItem(f"{i} ↔ {i+5}", (i, i+5))
-        self.edge_combo.currentIndexChanged.connect(lambda: self.setFocus())
-        
-        self.btn_add = QPushButton("Add")
-        self.btn_add.setStyleSheet(btn_style)
-        self.btn_add.clicked.connect(self.add_item_edge)
-        
-        edge_add_layout.addWidget(self.edge_combo)
-        edge_add_layout.addWidget(self.btn_add)
-        item_left_layout.addLayout(edge_add_layout)
-        self.item_panel_layout.addLayout(item_left_layout)
-
-        # Item list display
-        item_right_layout = QVBoxLayout()
-        lbl_items = QLabel("Pickup Order:")
-        lbl_items.setStyleSheet(control_label_style)
-        item_right_layout.addWidget(lbl_items)
-        
-        self.item_list_widget = QListWidget()
-        self.item_list_widget.setStyleSheet(
-            "background-color: #34495e; color: #ecf0f1; font-size: 14px; "
-            "font-weight: bold; border-radius: 3px; padding: 3px;"
-        )
-        self.item_list_widget.setMaximumHeight(80)
-        self.item_list_widget.setMinimumWidth(300)
-        item_right_layout.addWidget(self.item_list_widget)
-        
-        # Remove + Clear buttons
-        item_btn_layout = QHBoxLayout()
-        self.btn_remove = QPushButton("Remove")
-        self.btn_remove.setStyleSheet(btn_remove_style)
-        self.btn_remove.clicked.connect(self.remove_selected_item)
-        
-        self.btn_clear = QPushButton("Clear All")
-        self.btn_clear.setStyleSheet(btn_remove_style)
-        self.btn_clear.clicked.connect(self.clear_item_list)
-        
-        item_btn_layout.addWidget(self.btn_remove)
-        item_btn_layout.addWidget(self.btn_clear)
-        item_btn_layout.addStretch()
-        item_right_layout.addLayout(item_btn_layout)
-        self.item_panel_layout.addLayout(item_right_layout)
-
-        # Internal item edge list
-        self.item_edges = []
-
-        # Instructions Label
-        self.inst_label = QLabel(
-            "HOTKEYS -> STATE: [1-4] | TARGET: [W]heel, [A]rm\n"
-            "WHEEL: Arrows (Move), 'S' (Stop), 'E' (CW), 'O' (CCW)  |  ARM: 'V' (Left), 'H' (Right)\n"
-            "Press UP ARROW in Auto mode to start autonomous run with item list"
-        )
-        self.inst_label.setStyleSheet("color: #bdc3c7; font-size: 14px; font-weight: bold; margin-top: 10px;")
-        self.layout.addWidget(self.inst_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        lbl_keys = QLabel("Keys: [←1234] State | [WA] Target | [↑↓←→SEOU] Wheel | [VH] Arm")
+        lbl_keys.setStyleSheet("color: #7f8c8d; font-size: 11px;")
+        self.control_layout.addWidget(lbl_keys)
 
         # --- LIVE TELEMETRY DASHBOARD ---
         self.dashboard_frame = QFrame()
-        self.dashboard_frame.setStyleSheet("QFrame { background-color: #34495e; border-radius: 5px; margin-top: 10px; }")
+        self.dashboard_frame.setStyleSheet("QFrame { background-color: #34495e; border-radius: 4px; }")
         self.dashboard_layout = QHBoxLayout(self.dashboard_frame)
+        self.dashboard_layout.setContentsMargins(8, 4, 8, 4)
         
         self.lbl_phase = QLabel("Phase: IDLE")
         self.lbl_action = QLabel("Last Action: -")
@@ -346,7 +331,7 @@ class MainWindow(QMainWindow):
         self.lbl_items_progress = QLabel("Items: -")
         
         for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action, self.lbl_line, self.lbl_gyro, self.lbl_flags, self.lbl_items_progress]:
-            lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; padding: 5px;")
+            lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #ecf0f1; padding: 3px;")
             self.dashboard_layout.addWidget(lbl)
             
         self.layout.addWidget(self.dashboard_frame)
