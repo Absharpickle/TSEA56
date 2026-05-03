@@ -44,6 +44,7 @@ long long sim_segment_timer = 0;
 // --- TELEMETRY GLOBALS ---
 bool gui_known        = false;
 int telemetry_counter = 0;
+bool route_changed    = false; // Flagga: ny rutt ska skickas till GUI
 
 // --- LIVE STATE ---
 char nasta_beslut  = 's';
@@ -124,6 +125,7 @@ void start_autonomous_sequence(unsigned char state) {
     }
 
     log_next_action = true;
+    route_changed  = true; // Skicka rutten till GUI
     printf("-> Route Calculated. Driving to item 1/%d...\n", item_count);
     if (sim_sensor) printf("[SIM] Intersections will be triggered every %d ms\n", SIM_SEGMENT_MS);
 }
@@ -362,6 +364,7 @@ int main() {
                         printf("-> PHASE CHANGE: Driving to item %d/%d...\n",
                                current_item_index + 1, item_count);
                         log_next_action = true;
+                        route_changed   = true;
                     } else {
                         planera_hem_fran_pickup();
                         current_phase        = PHASE_TO_HOME;
@@ -376,6 +379,7 @@ int main() {
                         }
                         printf("\n-> PHASE CHANGE: All %d items collected. Heading Home...\n", item_count);
                         log_next_action = true;
+                        route_changed   = true;
                     }
                 }
             } 
@@ -508,6 +512,25 @@ int main() {
                 sendto(sockfd, telemetry_packet, (PACKET_SIZE+5), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                 telemetry_counter = 0;
             }
+        }
+        
+        // ---------------------------------------------------------
+        // 4b. SEND ROUTE UPDATE TO GUI (on route change)
+        // ---------------------------------------------------------
+        if (gui_known && route_changed) {
+            route_changed = false;
+            int *rutt = (current_phase == PHASE_TO_HOME) ? rutt_hem : rutt_till_vara;
+            int count = 0;
+            while (count < NODES && rutt[count] != STOP) count++;
+            
+            unsigned char route_packet[NODES + 3]; // header + count + nodes + footer
+            route_packet[0] = 0x08;
+            route_packet[1] = (unsigned char)count;
+            for (int i = 0; i < count; i++) {
+                route_packet[2 + i] = (unsigned char)rutt[i];
+            }
+            route_packet[2 + count] = 0xFF;
+            sendto(sockfd, route_packet, 3 + count, 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
         }
         
         // ---------------------------------------------------------

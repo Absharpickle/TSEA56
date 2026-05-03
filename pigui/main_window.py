@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self.current_active_node = 25
 
         self.map_frame = MapFrame(self.grid_nodes)
+        self.map_frame.edge_clicked.connect(self._on_edge_clicked)
         self.map_layout = QGridLayout(self.map_frame)
         self.map_layout.setSpacing(10)
 
@@ -117,7 +118,7 @@ class MainWindow(QMainWindow):
 
         self.edge_combo = QComboBox()
         self.edge_combo.setStyleSheet(combo_style)
-        self.edge_combo.setMinimumWidth(80)
+        self.edge_combo.setMinimumWidth(120)
         for i in range(25):
             kol = i % 5
             rad = i // 5
@@ -235,17 +236,29 @@ class MainWindow(QMainWindow):
 
         self.telemetry_thread = TelemetryThread(self.control_sock)
         self.telemetry_thread.telemetry_signal.connect(self.update_telemetry_dashboard)
+        self.telemetry_thread.route_signal.connect(self.update_route)
         self.telemetry_thread.start()
 
     # =================================================================
     # ITEM LIST MANAGEMENT
     # =================================================================
-    def add_item_edge(self):
-        edge = self.edge_combo.currentData()
+    def add_item_edge(self, edge=None):
+        if edge is None:
+            edge = self.edge_combo.currentData()
         if edge and edge not in self.item_edges:
             self.item_edges.append(edge)
             self.refresh_item_list_widget()
             self.update_map_highlights()
+        self.setFocus()
+
+    def _on_edge_clicked(self, edge):
+        """Handle click on a map edge — toggle: add or remove item."""
+        if edge in self.item_edges:
+            self.item_edges.remove(edge)
+            self.refresh_item_list_widget()
+            self.update_map_highlights()
+        else:
+            self.add_item_edge(edge)
         self.setFocus()
 
     def remove_selected_item(self):
@@ -289,11 +302,19 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_items_progress.setText("Items: -")
 
+        # Clear route display when robot goes idle
+        if data['phase'] == 0 and self.map_frame.route_nodes:
+            self.map_frame.set_route([])
+
         node = data.get('current_node', 25)
         direction = data.get('direction', 's')
         if node != self.current_active_node or direction != getattr(self, 'current_dir', 's'):
             self.current_dir = direction
             self.set_active_node(node, direction)
+
+    def update_route(self, route_nodes):
+        """Called when the robot sends a 0x08 route packet."""
+        self.map_frame.set_route(route_nodes)
 
     def set_active_node(self, node_id, direction='s'):
         dir_arrows = {'n': '↑', 's': '↓', 'e': '→', 'w': '←'}

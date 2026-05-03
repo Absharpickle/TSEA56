@@ -20,8 +20,9 @@ class VideoThread(QThread):
 
 
 class TelemetryThread(QThread):
-    """Listens for 13-byte telemetry packets from the robot and emits parsed dicts."""
+    """Listens for telemetry (0x06) and route (0x08) packets from the robot."""
     telemetry_signal = pyqtSignal(dict)
+    route_signal = pyqtSignal(list)  # Emits list of node IDs for the planned route
 
     def __init__(self, sock):
         super().__init__()
@@ -34,6 +35,8 @@ class TelemetryThread(QThread):
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
+
+                # 0x06 Telemetry packet (13 bytes)
                 if len(data) == 13 and data[0] == 0x06 and data[12] == 0xFF:
                     unpacked = struct.unpack('13B', data)
                     
@@ -51,6 +54,14 @@ class TelemetryThread(QThread):
                         'direction': chr(unpacked[11])
                     }
                     self.telemetry_signal.emit(telemetry_data)
+
+                # 0x08 Route packet: [0x08, count, node0, node1, ..., 0xFF]
+                elif len(data) >= 3 and data[0] == 0x08 and data[-1] == 0xFF:
+                    count = data[1]
+                    if len(data) == count + 3:  # header + count + N nodes + footer
+                        route = list(data[2:2 + count])
+                        self.route_signal.emit(route)
+
             except socket.timeout:
                 continue
             except Exception as e:
