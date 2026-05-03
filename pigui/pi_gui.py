@@ -4,9 +4,10 @@ import numpy as np
 import socket
 import struct
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame, QGridLayout)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt
-from PyQt6.QtGui import QImage, QPixmap
+                             QHBoxLayout, QLabel, QComboBox, QFrame, QGridLayout,
+                             QSizePolicy)
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QPoint
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 import os
 
 # Force low-latency FFmpeg flags
@@ -35,21 +36,17 @@ class TelemetryThread(QThread):
         self.running = True
 
     def run(self):
-        # Set a small timeout so the thread can gracefully exit if needed
         self.sock.settimeout(1.0)
         
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
-                # Check if it's our 9-byte telemetry packet (Starts with 0x06, Ends with 0xFF)
                 if len(data) == 9 and data[0] == 0x06 and data[8] == 0xFF:
-                    # Unpack 9 unsigned bytes
                     unpacked = struct.unpack('9B', data)
                     
-                    # Create a dictionary of the received data
                     telemetry_data = {
                         'phase': unpacked[1],
-                        'action': chr(unpacked[2]), # Convert ASCII code back to character
+                        'action': chr(unpacked[2]), 
                         'next_action': chr(unpacked[3]),
                         'line_var': unpacked[4],
                         'gyro1': unpacked[5],
@@ -60,96 +57,174 @@ class TelemetryThread(QThread):
             except socket.timeout:
                 continue
             except Exception as e:
-                print(f"[!] Telemetry error: {e}") # Ignore other socket errors during normal operation
-                # DEBUG
-                print(f"Received {len(data)} bytes: {data.hex()}")
+                print(f"[!] Telemetry Error: {e}") 
+
     def stop(self):
         self.running = False
+
+# --- Custom Map Frame with Line Drawing ---
+class MapFrame(QFrame):
+    def __init__(self, grid_nodes_ref, parent=None):
+        super().__init__(parent)
+        self.grid_nodes = grid_nodes_ref
+        self.setStyleSheet("background-color: #1a252f; border: 2px solid #7f8c8d; border-radius: 5px;")
+        self.setFixedSize(480, 480)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        
+        if not self.grid_nodes or len(self.grid_nodes) < 26:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        pen = QPen(QColor("#2c3e50"), 6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+
+        def get_center(node_id):
+            widget = self.grid_nodes[node_id]
+            return widget.pos() + QPoint(widget.width() // 2, widget.height() // 2)
+
+        for i in range(25):
+            kol = i % 5
+            if kol < 4:  
+                p1 = get_center(i)
+                p2 = get_center(i + 1)
+                painter.drawLine(p1, p2)
+
+        for i in range(25):
+            rad = i // 5
+            if rad < 4:  
+                p1 = get_center(i)
+                p2 = get_center(i + 5)
+                painter.drawLine(p1, p2)
+
+        p_start = get_center(25)
+        p_0 = get_center(0)
+        painter.drawLine(p_start, p_0)
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PiCam Ground Control")
-        self.setStyleSheet("QMainWindow { background-color: #2c3e50; color: white; }")
+        # Added generic QLabel styling to ensure white text everywhere by default
+        self.setStyleSheet("""
+            QMainWindow { background-color: #2c3e50; color: white; }
+            QLabel { color: white; }
+        """)
         
-        # Ensure the main window can capture keyboard inputs
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        # Main Layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
-        # Horizontal line separator
         self.top_hlayout = QHBoxLayout()
         self.layout.addLayout(self.top_hlayout)
 
-        # Video Box
         self.image_label = QLabel(self)
         self.image_label.setFixedSize(640, 480)
         self.image_label.setStyleSheet("border: 3px solid #34495e; background-color: black;")
         self.top_hlayout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # MAP GRID
-        self.map_frame = QFrame()
-        self.map_frame.setFixedSize(480, 480)
-        self.map_frame.setStyleSheet("background-color: #34495e; border-radius: 5px;")
+        # --- MAP SETUP ---
+        self.grid_nodes = {} 
+        self.current_active_node = 25 
+        
+        self.map_frame = MapFrame(self.grid_nodes)
         self.map_layout = QGridLayout(self.map_frame)
-        self.map_layout.setSpacing(5)
+        self.map_layout.setSpacing(15) 
 
-        self.grid_notes = {}
+        self.node_style_idle = """
+            background-color: #95a5a6; 
+            color: black; 
+            font-weight: bold; 
+            border-radius: 25px; 
+            font-size: 16px;
+        """
+        
+        self.node_style_active = """
+            background-color: #e74c3c; 
+            color: white; 
+            font-weight: bold; 
+            border-radius: 25px; 
+            font-size: 18px;
+            border: 3px solid #f1c40f;
+        """
 
-        self.lbl_start = QLabel("START\n(25)")
-        self.lbl_start.setFixedSize(60, 60)
+        self.lbl_start = QLabel("25")
+        self.lbl_start.setFixedSize(50, 50)
         self.lbl_start.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_start.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; border-radius: 5px;")
-        self.map_layout.addWidget(self.lbl_start, 0, 0)
-        self.grid_notes[25] = self.lbl_start
+        self.lbl_start.setStyleSheet(self.node_style_active) 
+        self.map_layout.addWidget(self.lbl_start, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.grid_nodes[25] = self.lbl_start
 
         for i in range(25):
-            rad = (i // 5) + 1
-            col = i % 5
+            rad = (i // 5) + 1 
+            kol = i % 5
             lbl = QLabel(str(i))
-            lbl.setFixedSize(60, 60)
+            lbl.setFixedSize(50, 50)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("background-color: #7f8c8d; color: white; font-weight: bold; border-radius: 5px;")
-            self.map_layout.addWidget(lbl, rad, col)
-            self.grid_notes[i] = lbl
+            lbl.setStyleSheet(self.node_style_idle)
+            self.map_layout.addWidget(lbl, rad, kol, alignment=Qt.AlignmentFlag.AlignCenter)
+            self.grid_nodes[i] = lbl
 
         self.top_hlayout.addWidget(self.map_frame, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # --- TELEMETRY SETUP ---
-        # self.pi_ip = "10.42.0.1"  # IP till pi hotspot
-        self.pi_ip = "192.168.1.50" # IP för test hemma
+        self.pi_ip = "192.168.1.50" # BYT TILL DIN PI:S IP
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # We must bind our socket to listen for returning packets on whatever port the OS assigns
         self.control_sock.bind(("0.0.0.0", 0)) 
 
         # --- CONTROL PANEL ---
+        # Stramat upp layouten för kontrollerna
         self.control_layout = QHBoxLayout()
+        self.control_layout.setSpacing(10) # Minskar avståndet mellan widgets
+        self.control_layout.setContentsMargins(50, 10, 50, 10) # Lägger till lite luft på sidorna
         self.layout.addLayout(self.control_layout)
 
+        # Gemensam stil för kontroll-etiketterna
+        control_label_style = "font-size: 16px; font-weight: bold; padding-right: 5px; color: #ecf0f1;"
+        combo_style = "background-color: #ecf0f1; color: #2c3e50; padding: 5px 10px; font-size: 14px; font-weight: bold; border-radius: 3px;"
+
         # 1. State Selector
+        lbl_state = QLabel("State:")
+        lbl_state.setStyleSheet(control_label_style)
+        # Sätt en fast storlek på etiketten så den inte sprider ut sig
+        lbl_state.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed) 
+        
         self.state_combo = QComboBox()
-        self.state_combo.setStyleSheet("background-color: white; color: black; padding: 5px; font-size: 14px;")
+        self.state_combo.setStyleSheet(combo_style)
+        self.state_combo.setMinimumWidth(200) # Gör rullgardinen lite bredare
         self.state_combo.addItem("1: (Auto, Auto)", 0)
         self.state_combo.addItem("2: (Auto, Manual)", 1)
         self.state_combo.addItem("3: (Manual, Auto)", 2)
         self.state_combo.addItem("4: (Manual, Manual)", 3)
-        self.state_combo.setCurrentIndex(3) # Default to 3
-        # Return focus to main window after clicking so keyboard works
+        self.state_combo.setCurrentIndex(3) 
         self.state_combo.currentIndexChanged.connect(lambda: self.setFocus()) 
-        self.control_layout.addWidget(QLabel("State:"))
+        
+        self.control_layout.addWidget(lbl_state)
         self.control_layout.addWidget(self.state_combo)
+        
+        # Lägg till ett fjäder-element (spacer) i mitten för att trycka isär State och Target lite snyggt
+        self.control_layout.addStretch()
 
         # 2. Target Selector
+        lbl_target = QLabel("Target:")
+        lbl_target.setStyleSheet(control_label_style)
+        lbl_target.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
         self.target_combo = QComboBox()
-        self.target_combo.setStyleSheet("background-color: white; color: black; padding: 5px; font-size: 14px;")
+        self.target_combo.setStyleSheet(combo_style)
+        self.target_combo.setMinimumWidth(150)
         self.target_combo.addItem("Wheel", "wheel")
         self.target_combo.addItem("Arm", "arm")
         self.target_combo.currentIndexChanged.connect(lambda: self.setFocus())
-        self.control_layout.addWidget(QLabel("Target:"))
+        
+        self.control_layout.addWidget(lbl_target)
         self.control_layout.addWidget(self.target_combo)
 
         # Instructions Label
@@ -157,10 +232,10 @@ class MainWindow(QMainWindow):
             "HOTKEYS -> STATE: [1-4] | TARGET: [W]heel, [A]rm\n"
             "WHEEL: Arrows (Move), 'S' (Stop), 'E' (CW), 'O' (CCW)  |  ARM: 'V' (Left), 'H' (Right)"
         )
-        self.inst_label.setStyleSheet("color: #bdc3c7; font-size: 13px; font-weight: bold;")
+        self.inst_label.setStyleSheet("color: #bdc3c7; font-size: 14px; font-weight: bold; margin-top: 10px;")
         self.layout.addWidget(self.inst_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # --- NEW: LIVE TELEMETRY DASHBOARD ---
+        # --- LIVE TELEMETRY DASHBOARD ---
         self.dashboard_frame = QFrame()
         self.dashboard_frame.setStyleSheet("QFrame { background-color: #34495e; border-radius: 5px; margin-top: 10px; }")
         self.dashboard_layout = QHBoxLayout(self.dashboard_frame)
@@ -175,24 +250,20 @@ class MainWindow(QMainWindow):
         for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action, self.lbl_line, self.lbl_gyro, self.lbl_flags]:
             lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; padding: 5px;")
             self.dashboard_layout.addWidget(lbl)
-
-
-        self.layout.addWidget(self.dashboard_frame)
             
-        # Start Video Thread
+        self.layout.addWidget(self.dashboard_frame)
+
+        # Start Threads
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.start()
 
-        # Start Telemetry Thread
         self.telemetry_thread = TelemetryThread(self.control_sock)
         self.telemetry_thread.telemetry_signal.connect(self.update_telemetry_dashboard)
         self.telemetry_thread.start()
 
-        # Phase names mapping
         self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME"}
 
-    # --- NEW: UPDATE TELEMETRY UI METHOD ---
     def update_telemetry_dashboard(self, data):
         phase_str = self.phase_names.get(data['phase'], "UNKNOWN")
         self.lbl_phase.setText(f"Phase: {phase_str}")
@@ -202,41 +273,43 @@ class MainWindow(QMainWindow):
         self.lbl_gyro.setText(f"Gyro: ({data['gyro1']}, {data['gyro2']})")
         self.lbl_flags.setText(f"Flags: {data['flags']}")
 
+        if data['phase'] == 0 and self.current_active_node != 25:
+            self.set_active_node(25)
+
+
+    def set_active_node(self, node_id):
+        if self.current_active_node in self.grid_nodes:
+            self.grid_nodes[self.current_active_node].setStyleSheet(self.node_style_idle)
+        
+        if node_id in self.grid_nodes:
+            self.grid_nodes[node_id].setStyleSheet(self.node_style_active)
+            self.current_active_node = node_id
+
     # --- KEYBOARD LISTENER ---
     def keyPressEvent(self, event):
         key = event.key()
         action_char = None
 
-        # 1. --- HOTKEYS FOR STATE SELECTION ---
         if key == Qt.Key.Key_1:
             self.state_combo.setCurrentIndex(0)
-            print("Hot-swapped State: 1 (Auto, Auto)")
             return
         elif key == Qt.Key.Key_2:
             self.state_combo.setCurrentIndex(1)
-            print("Hot-swapped State: 2 (Auto, Manual)")
             return
         elif key == Qt.Key.Key_3:
             self.state_combo.setCurrentIndex(2)
-            print("Hot-swapped State: 3 (Manual, Auto)")
             return
         elif key == Qt.Key.Key_4:
             self.state_combo.setCurrentIndex(3)
-            print("Hot-swapped State: 4 (Manual, Manual)")
             return
 
-        # 2. --- HOTKEYS FOR TARGET SELECTION ---
         elif key == Qt.Key.Key_W:
             self.target_combo.setCurrentIndex(0)
-            print("Hot-swapped Target: Wheel")
             return
         elif key == Qt.Key.Key_A:
             self.target_combo.setCurrentIndex(1)
-            print("Hot-swapped Target: Arm")
             return
 
-        # 3. --- ACTION COMMANDS ---
-        # Get the currently selected target to filter inputs
         target = self.target_combo.currentData()
         
         if target == "wheel":
@@ -247,45 +320,37 @@ class MainWindow(QMainWindow):
             elif key == Qt.Key.Key_S: action_char = 's'
             elif key == Qt.Key.Key_E: action_char = 'e'
             elif key == Qt.Key.Key_O: action_char = 'o'
-            elif key == Qt.Key.Key_U: action_char = 'u' # Lagt till U-sväng
+            elif key == Qt.Key.Key_U: action_char = 'u' 
             
         elif target == "arm":
             if key == Qt.Key.Key_V: action_char = 'v'
             elif key == Qt.Key.Key_H: action_char = 'h'
 
-        # If a valid action key was pressed, send the packet
         if action_char:
             self.send_packet(action_char)
 
     def send_packet(self, action_char):
-        # Read the current selections from the dropdowns
         current_state = self.state_combo.currentData()
         current_target = self.target_combo.currentData()
 
-        # Map target string to byte (0x00 for wheel, 0x01 for arm)
         target_byte = 0x00 if current_target == "wheel" else 0x01
-        
-        # Convert character to ASCII byte
         action_byte = ord(str(action_char)[0])  
 
-        # Pack the 8 bytes
         packet = struct.pack('BBBBBBBB',
-                             0x05,           # Start byte
-                             current_state,  # State (1, 2, 3, or 4)
-                             target_byte,    # Cmd (0 or 1)
-                             action_byte,    # Action (ASCII int)
-                             0x00,           # Line var reserved
-                             0x00,           # Gyro 1 reserved
-                             0x00,           # Gyro 2 reserved
-                             0xFF)           # End byte
+                             0x05,           
+                             current_state,  
+                             target_byte,    
+                             action_byte,    
+                             0x00,           
+                             0x00,           
+                             0x00,           
+                             0xFF)           
         
         try:
             self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
-            # print(f"[{current_target.upper()}] Sent '{action_char}' (Hex: {packet.hex().upper()})")
         except Exception as e:
             print(f"Error sending packet: {e}")
 
-    # Video display methods
     def update_image(self, cv_img):
         qt_img = self.convert_cv_qt(cv_img)
         self.image_label.setPixmap(qt_img)
@@ -298,7 +363,6 @@ class MainWindow(QMainWindow):
         return QPixmap.fromImage(convert_to_Qt_format)
 
     def closeEvent(self, event):
-        # Cleanly stop the thread when closing the application
         self.telemetry_thread.stop()
         self.telemetry_thread.wait()
         super().closeEvent(event)
