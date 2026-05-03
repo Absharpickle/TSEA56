@@ -1,1 +1,0 @@
-rpicam-vid -t 0 -n --codec mjpeg --width 640 --height 480 --framerate 30 -o udp://10.42.0.30:5000
