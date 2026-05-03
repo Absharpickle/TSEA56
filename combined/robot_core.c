@@ -16,7 +16,7 @@
 #include "protocol.h"
 
 // --- SIM MODE DEFINITIONS ---
-#define SIM_SEGMENT_MS 3000
+#define SIM_SEGMENT_MS 1000
 
 // --- STATE MACHINE ---
 typedef enum {
@@ -54,7 +54,7 @@ uint8_t current_node = START;
 char current_dir = 's';
 
 // =================================================================
-// HJÄLPFUNKTION: Tidsmätning i millisekunder
+// HJÄLPFUNKTION: Tidsmätning i millisekunder (endast för sim mode)
 // =================================================================
 long long current_time_ms() {
     struct timeval tv;

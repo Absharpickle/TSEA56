@@ -83,7 +83,7 @@ void bygg_beslut(int rutt[], char start_dir, char beslut[]) {
 }
 
 // =================================================================
-// DIJKSTRA: Kortaste vägen i grafen
+// DIJKSTRAS
 // =================================================================
 int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
     int kostnad[NODES];
@@ -133,7 +133,7 @@ int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
 }
 
 // =================================================================
-// RUTTPLANERING: Till vara, hem, och nästa vara
+// RUTTPLANERING
 // =================================================================
 void planera_till_vara(int from_node, char from_dir) {
     int rutt_alt1[NODES], rutt_alt2[NODES];
