@@ -272,11 +272,17 @@ void aktivt_beslut_fn(int index) {
     }
 }
 
-void start_autonomous_sequence(unsigned char state) {
-    vara_u = 10; // Varans ena sida (nod 10)
-    vara_v = 11; // Varans andra sida (nod 11)
+void start_autonomous_sequence(unsigned char state, uint8_t item_u, uint8_t item_v) {
+    // Validera att nodparet är giltigt (inom gräns och angränsande)
+    if (item_u >= NODES || item_v >= NODES || !vag[item_u][item_v]) {
+        printf("[!] Invalid item location (%d, %d). Ignoring start.\n", item_u, item_v);
+        return;
+    }
+
+    vara_u = item_u; // Varans ena sida (mottagen från GUI)
+    vara_v = item_v; // Varans andra sida (mottagen från GUI)
     
-    printf("\n=== CALCULATING AUTONOMOUS ROUTE ===\n");
+    printf("\n=== CALCULATING AUTONOMOUS ROUTE (item between %d and %d) ===\n", vara_u, vara_v);
     planera_hela_resan(START, 's'); // Planera hela resan från startnoden med söderlig riktning
     
     current_auto_state   = state;         // Spara körläget (skickas med i varje paket)
@@ -411,7 +417,9 @@ int main() {
             if (state == 0x00 || state == 0x01) {
                 // AUTO-LÄGE: 'f' som start-kommando triggar autonomi, annars manuellt
                 if (action == 'f' && current_phase == PHASE_IDLE) {
-                    start_autonomous_sequence(state);
+                    uint8_t item_u = buffer[4]; // Varans nod 1 (skickas av GUI i byte 4)
+                    uint8_t item_v = buffer[5]; // Varans nod 2 (skickas av GUI i byte 5)
+                    start_autonomous_sequence(state, item_u, item_v);
                 } else {
                     // Manuell styrning i auto-läge (t.ex. från GUI under test)
                     buffer[4] = line_var;

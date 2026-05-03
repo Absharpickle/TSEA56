@@ -67,8 +67,14 @@ class MapFrame(QFrame):
     def __init__(self, grid_nodes_ref, parent=None):
         super().__init__(parent)
         self.grid_nodes = grid_nodes_ref
+        self.highlighted_edge = None  # Tuple (node_a, node_b) for item location
         self.setStyleSheet("background-color: #1a252f; border: 2px solid #7f8c8d; border-radius: 5px;")
         self.setFixedSize(480, 480)
+
+    def set_item_edge(self, edge_tuple):
+        """Set the highlighted edge (item location) and repaint."""
+        self.highlighted_edge = edge_tuple
+        self.update()
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -104,6 +110,15 @@ class MapFrame(QFrame):
         p_start = get_center(25)
         p_0 = get_center(0)
         painter.drawLine(p_start, p_0)
+
+        # Draw highlighted edge (item location) on top in orange
+        if self.highlighted_edge:
+            a, b = self.highlighted_edge
+            if a in self.grid_nodes and b in self.grid_nodes:
+                highlight_pen = QPen(QColor("#e67e22"), 8)
+                highlight_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(highlight_pen)
+                painter.drawLine(get_center(a), get_center(b))
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -212,7 +227,38 @@ class MainWindow(QMainWindow):
         # Lägg till ett fjäder-element (spacer) i mitten för att trycka isär State och Target lite snyggt
         self.control_layout.addStretch()
 
-        # 2. Target Selector
+        # 2. Item Location Selector
+        lbl_item = QLabel("Item:")
+        lbl_item.setStyleSheet(control_label_style)
+        lbl_item.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        self.item_combo = QComboBox()
+        self.item_combo.setStyleSheet(combo_style)
+        self.item_combo.setMinimumWidth(120)
+
+        # Populate with all valid edges in the 5x5 grid
+        for i in range(25):
+            kol = i % 5
+            rad = i // 5
+            if kol < 4:  # Horizontal edge: i <-> i+1
+                self.item_combo.addItem(f"{i} ↔ {i+1}", (i, i+1))
+            if rad < 4:  # Vertical edge: i <-> i+5
+                self.item_combo.addItem(f"{i} ↔ {i+5}", (i, i+5))
+
+        # Default to edge 10 <-> 11 (matches previous hardcoded value)
+        default_idx = self.item_combo.findText("10 ↔ 11")
+        if default_idx >= 0:
+            self.item_combo.setCurrentIndex(default_idx)
+
+        self.item_combo.currentIndexChanged.connect(self.on_item_location_changed)
+        self.item_combo.currentIndexChanged.connect(lambda: self.setFocus())
+
+        self.control_layout.addWidget(lbl_item)
+        self.control_layout.addWidget(self.item_combo)
+
+        self.control_layout.addStretch()
+
+        # 3. Target Selector
         lbl_target = QLabel("Target:")
         lbl_target.setStyleSheet(control_label_style)
         lbl_target.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -230,7 +276,8 @@ class MainWindow(QMainWindow):
         # Instructions Label
         self.inst_label = QLabel(
             "HOTKEYS -> STATE: [1-4] | TARGET: [W]heel, [A]rm\n"
-            "WHEEL: Arrows (Move), 'S' (Stop), 'E' (CW), 'O' (CCW)  |  ARM: 'V' (Left), 'H' (Right)"
+            "WHEEL: Arrows (Move), 'S' (Stop), 'E' (CW), 'O' (CCW)  |  ARM: 'V' (Left), 'H' (Right)\n"
+            "Press UP ARROW in Auto mode to start autonomous run with selected item location"
         )
         self.inst_label.setStyleSheet("color: #bdc3c7; font-size: 14px; font-weight: bold; margin-top: 10px;")
         self.layout.addWidget(self.inst_label, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -263,6 +310,15 @@ class MainWindow(QMainWindow):
         self.telemetry_thread.start()
 
         self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME"}
+
+        # Set initial item edge highlight on map
+        self.on_item_location_changed()
+
+    def on_item_location_changed(self):
+        """Update the map highlight when the item location combo changes."""
+        edge = self.item_combo.currentData()
+        if edge:
+            self.map_frame.set_item_edge(edge)
 
     def update_telemetry_dashboard(self, data):
         phase_str = self.phase_names.get(data['phase'], "UNKNOWN")
@@ -334,15 +390,24 @@ class MainWindow(QMainWindow):
         current_target = self.target_combo.currentData()
 
         target_byte = 0x00 if current_target == "wheel" else 0x01
-        action_byte = ord(str(action_char)[0])  
+        action_byte = ord(str(action_char)[0])
+
+        # In auto modes (state 0 or 1), embed the item location in bytes 4-5
+        # so that the robot knows where the item is when it receives the start command.
+        item_u = 0x00
+        item_v = 0x00
+        if current_state in (0x00, 0x01):
+            edge = self.item_combo.currentData()
+            if edge:
+                item_u, item_v = edge
 
         packet = struct.pack('BBBBBBBB',
                              0x05,           
                              current_state,  
                              target_byte,    
                              action_byte,    
-                             0x00,           
-                             0x00,           
+                             item_u,         
+                             item_v,         
                              0x00,           
                              0xFF)           
         
