@@ -57,7 +57,7 @@ char get_turn(char nu, char nasta) {
     if (nu == 'w' && nasta == 's') return 'o';
     if (nu == 's' && nasta == 'e') return 'o';
     if (nu == 'e' && nasta == 'n') return 'o';
-    return 'b';
+    return 'f'; // Ska aldrig nås — Dijkstra undviker 180° svängar
 }
 
 char get_motsatt_dir(char nu) {
@@ -111,7 +111,11 @@ int hitta_rutt(int start, int mal, int rutt[], char start_dir) {
         for (int v = 0; v < NODES; v++) {
             if (vag[u][v] && !besokt[v]) {
                 char nasta_dir = nodriktningsmatris[u][v]; 
-                int straff     = (riktning_in[u] != nasta_dir) ? 1 : 0;
+                // Hög kostnad för 180°-sväng (förbjud), låg för 90°
+                int straff = 0;
+                if (riktning_in[u] != nasta_dir) {
+                    straff = (nasta_dir == get_motsatt_dir(riktning_in[u])) ? 9999 : 1;
+                }
                 int ny_kostnad = kostnad[u] + 100 + straff;
                 if (ny_kostnad < kostnad[v]) {
                     kostnad[v]     = ny_kostnad;
