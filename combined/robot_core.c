@@ -315,7 +315,7 @@ int main() {
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
             if (is_rotating) {
-                if (elapsed_in_state >= 1500) { 
+                if (elapsed_in_state >= 2000) { 
                     is_rotating   = false;
                     aktivt_beslut = 'f';
                     
@@ -339,7 +339,7 @@ int main() {
                     }
                     log_next_action = true;
                 }
-                else if (elapsed_in_state >= 2000) {
+                else if (elapsed_in_state >= 10000) {
                     is_picking_up = false;
                     current_item_index++;
 
