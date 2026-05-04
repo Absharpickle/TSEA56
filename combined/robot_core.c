@@ -52,6 +52,7 @@ char aktivt_beslut = 's';
 int  loop_counter  = 0;
 uint8_t current_node = START;
 char current_dir = 's';
+u_int8_t action_done = 0;
 
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder (endast för sim mode)
@@ -314,10 +315,18 @@ int main() {
             
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
+            unsigned char styr_packet[PACKET_SIZE] = {
+                            pwm_r, pwm_l, grip_r, 
+                            grip_z, action_done
+            };
+
+            read(i2c_styr_fd, styr_packet, PACKET_SIZE);
+
             if (is_rotating) {
-                if (elapsed_in_state >= 2000) { 
+                if (action_done == 1) { 
                     is_rotating   = false;
                     aktivt_beslut = 'f';
+                    action_done = 0;
                     
                     if (current_phase == PHASE_TO_ITEM) {
                         nasta_beslut = beslut_till_vara[current_action_index + 1];
@@ -330,8 +339,9 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                if (elapsed_in_state >= 1000 && aktivt_beslut == 's') {
+                if (action_done == 1 && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
+                    action_done = 0;
                     if (current_item_index + 1 < item_count) {
                         nasta_beslut = 'f';
                     } else {
@@ -339,9 +349,10 @@ int main() {
                     }
                     log_next_action = true;
                 }
-                else if (elapsed_in_state >= 10000) {
+                else if (action_done == 1 && aktivt_beslut == 'v') {
                     is_picking_up = false;
                     current_item_index++;
+                    action_done = 0;
 
                     if (current_item_index < item_count) {
                         vara_u = item_list_u[current_item_index];
