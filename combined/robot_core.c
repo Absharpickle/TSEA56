@@ -315,7 +315,7 @@ int main() {
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
             if (is_rotating) {
-                if (elapsed_in_state >= 10500) { 
+                if (elapsed_in_state >= 1500) { 
                     is_rotating   = false;
                     aktivt_beslut = 'f';
                     
@@ -330,7 +330,7 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                if (elapsed_in_state >= 10000 && aktivt_beslut == 's') {
+                if (elapsed_in_state >= 1000 && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
                     if (current_item_index + 1 < item_count) {
                         nasta_beslut = 'f';
@@ -339,7 +339,7 @@ int main() {
                     }
                     log_next_action = true;
                 }
-                else if (elapsed_in_state >= 20000) {
+                else if (elapsed_in_state >= 2000) {
                     is_picking_up = false;
                     current_item_index++;
 
@@ -536,7 +536,7 @@ int main() {
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
-        usleep(2000); 
+        usleep(200); 
     }
 
     close(sockfd);
