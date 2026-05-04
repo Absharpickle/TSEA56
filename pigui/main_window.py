@@ -10,6 +10,10 @@ from threads import VideoThread, TelemetryThread
 from map_widget import MapFrame
 from protocol import build_command_packet, build_item_list_packet
 
+IP_ADDRESS_HOME = "192.168.1.50"
+IP_ADDRESS_SITE = "10.42.0.1"
+
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -49,7 +53,10 @@ class MainWindow(QMainWindow):
         self.top_hlayout.addLayout(right_vlayout)
 
         # --- NETWORKING ---
-        self.pi_ip = "192.168.1.50"
+        if socket.gethostname() == "joeeb":
+            self.pi_ip = "[IP_ADDRESS_HOME]" # Testing at home
+        else:
+            self.pi_ip = "[IP_ADDRESS_SITE]" # Testing at site
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.control_sock.bind(("0.0.0.0", 0))

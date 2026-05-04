@@ -52,7 +52,7 @@ char aktivt_beslut = 's';
 int  loop_counter  = 0;
 uint8_t current_node = START;
 char current_dir = 's';
-u_int8_t action_done = 0;
+uint8_t action_done = 0;  // Sätts till 1 av styrmodul via I2C när en åtgärd är klar
 
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder (endast för sim mode)
@@ -216,20 +216,21 @@ int main() {
         // ---------------------------------------------------------
         // 1. READ FROM SENSOR (0x10)
         // ---------------------------------------------------------
-        unsigned char sensor_packet[PACKET_SIZE];
-        if (!sim_sensor && i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_packet, PACKET_SIZE) == PACKET_SIZE) { 
+        unsigned char sensor_raw[PACKET_SIZE];
+        if (!sim_sensor && i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
             
             static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
-            if (memcmp(sensor_packet, last_sensor_packet, PACKET_SIZE) != 0) {
-                log_sensor_data(sensor_packet);
-                memcpy(last_sensor_packet, sensor_packet, PACKET_SIZE);
+            if (memcmp(sensor_raw, last_sensor_packet, PACKET_SIZE) != 0) {
+                log_sensor_data(sensor_raw);
+                memcpy(last_sensor_packet, sensor_raw, PACKET_SIZE);
             }
             
-            flags    = sensor_packet[0];
-            line_var = sensor_packet[1];
-            angle    = sensor_packet[2];
-            gyro1    = sensor_packet[6];
-            gyro2    = sensor_packet[7];
+            SensorData sd = parse_sensor_packet(sensor_raw);
+            flags    = sd.flags;
+            line_var = sd.line_var;
+            angle    = sd.angle;
+            gyro1    = sd.gyro1;
+            gyro2    = sd.gyro2;
 
             flags_korsning = (flags & 0x0C) >> 2;
             
@@ -248,23 +249,20 @@ int main() {
         }
 
         // --- 0x05 Command Packet ---
-        if (n == PACKET_SIZE && buffer[0] == 0x05 && buffer[7] == 0xFF) {
-            unsigned char state  = buffer[1];
-            unsigned char target = buffer[2];
-            char action          = (char)buffer[3];
-
-            if (state == 0x00 || state == 0x01) {
-                if (action == 'f' && current_phase == PHASE_IDLE) {
-                    start_autonomous_sequence(state);
+        CommandPacket cmd = parse_command_packet(buffer, n);
+        if (cmd.valid) {
+            if (cmd.state == 0x00 || cmd.state == 0x01) {
+                if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
+                    start_autonomous_sequence(cmd.state);
                 } else {
-                    buffer[4] = line_var;
-                    buffer[5] = gyro1;
-                    buffer[6] = gyro2;
-                    if (!sim_motor) write(i2c_styr_fd, buffer, PACKET_SIZE);
-                    log_verification(buffer, action);
-                    printf("-> Manual Command Forwarded: '%c'\n", action);
+                    unsigned char fwd[PACKET_SIZE];
+                    build_motor_packet(fwd, cmd.state, false, cmd.action, line_var, gyro1, gyro2);
+                    fwd[2] = cmd.target; // Behåll target-byte från GUI
+                    if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
+                    log_verification(fwd, cmd.action);
+                    printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
                 }
-            } else if (state == 0x02 || state == 0x03) {
+            } else if (cmd.state == 0x02 || cmd.state == 0x03) {
                 if (current_phase != PHASE_IDLE) {
                     printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
                     current_phase        = PHASE_IDLE;
@@ -275,37 +273,23 @@ int main() {
                     aktivt_beslut        = 's';
                     nasta_beslut         = 's';
                 }
-                buffer[4] = line_var;
-                buffer[5] = gyro1;
-                buffer[6] = gyro2;
-                if (!sim_motor) write(i2c_styr_fd, buffer, PACKET_SIZE);
-                log_verification(buffer, action);
-                printf("-> Manual Command Forwarded: '%c'\n", action);
+                unsigned char fwd[PACKET_SIZE];
+                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var, gyro1, gyro2);
+                fwd[2] = cmd.target;
+                if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
+                log_verification(fwd, cmd.action);
+                printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
             }
         }
 
         // --- 0x07 Item List Packet ---
-        if (n >= 4 && buffer[0] == 0x07) {
-            int num = buffer[1];
-            int expected_len = 3 + 2 * num;
-            if (num > 0 && num <= MAX_ITEMS && n == expected_len && buffer[n-1] == 0xFF) {
-                item_count = 0;
-                for (int i = 0; i < num; i++) {
-                    uint8_t iu = buffer[2 + 2*i];
-                    uint8_t iv = buffer[3 + 2*i];
-                    if (iu < NODES && iv < NODES && vag[iu][iv]) {
-                        item_list_u[item_count] = iu;
-                        item_list_v[item_count] = iv;
-                        item_count++;
-                    } else {
-                        printf("[!] Skipping invalid item edge (%d, %d)\n", iu, iv);
-                    }
-                }
-                current_item_index = 0;
-                printf("[ITEMS] Received %d valid item(s) from GUI\n", item_count);
-            } else {
-                printf("[!] Invalid item-list packet (n=%d, count=%d)\n", n, num);
-            }
+        ItemListPacket items = parse_item_list_packet(buffer, n);
+        if (items.valid && items.count > 0) {
+            item_count = items.count;
+            memcpy(item_list_u, items.items_u, items.count * sizeof(uint8_t));
+            memcpy(item_list_v, items.items_v, items.count * sizeof(uint8_t));
+            current_item_index = 0;
+            printf("[ITEMS] Received %d valid item(s) from GUI\n", item_count);
         }
 
         // ---------------------------------------------------------
@@ -315,18 +299,26 @@ int main() {
             
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
-            unsigned char styr_packet[PACKET_SIZE] = {
-                            pwm_r, pwm_l, grip_r, 
-                            grip_z, action_done
-            };
-
-            read(i2c_styr_fd, styr_packet, PACKET_SIZE);
+            // --- Läs action_done från styrmodul (0x12) via I2C ---
+            if (!sim_motor && i2c_styr_fd >= 0) {
+                unsigned char styr_raw[PACKET_SIZE] = {0};
+                if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                    if (resp.valid) action_done = resp.action_done;
+                }
+            }
 
             if (is_rotating) {
-                if (action_done == 1) { 
+                // I riktigt läge: vänta på action_done från styrmodul
+                // I sim-läge: fallback till timer (10500 ms)
+                bool rotation_done = sim_motor 
+                    ? (elapsed_in_state >= 10500) 
+                    : (action_done == 1);
+
+                if (rotation_done) { 
                     is_rotating   = false;
                     aktivt_beslut = 'f';
-                    action_done = 0;
+                    action_done   = 0;
                     
                     if (current_phase == PHASE_TO_ITEM) {
                         nasta_beslut = beslut_till_vara[current_action_index + 1];
@@ -339,9 +331,16 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                if (action_done == 1 && aktivt_beslut == 's') {
+                // Steg 1: Stoppa → vänta på action_done → skicka 'v'
+                bool pickup_step_done = sim_motor 
+                    ? (aktivt_beslut == 's' && elapsed_in_state >= 10000) ||
+                      (aktivt_beslut == 'v' && elapsed_in_state >= 20000)
+                    : (action_done == 1);
+
+                if (pickup_step_done && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
                     action_done = 0;
+                    action_timer_start = current_time_ms(); // Reset timer för sim steg 2
                     if (current_item_index + 1 < item_count) {
                         nasta_beslut = 'f';
                     } else {
@@ -349,7 +348,8 @@ int main() {
                     }
                     log_next_action = true;
                 }
-                else if (action_done == 1 && aktivt_beslut == 'v') {
+                // Steg 2: Pickup klar → planera nästa
+                else if (pickup_step_done && aktivt_beslut == 'v') {
                     is_picking_up = false;
                     current_item_index++;
                     action_done = 0;
@@ -451,11 +451,10 @@ int main() {
                             nasta_beslut  = 's';
                             printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
                             
-                            unsigned char stop_packet[PACKET_SIZE] = {
-                                0x05, current_auto_state, 0x00, 's', 
-                                line_var, gyro1, gyro2, 0xFF
-                            };
-                            if (!sim_motor) write(i2c_styr_fd, stop_packet, PACKET_SIZE);
+                            unsigned char stop_pkt[PACKET_SIZE];
+                            build_motor_packet(stop_pkt, current_auto_state, false,
+                                               's', line_var, gyro1, gyro2);
+                            if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
                         }
                     }
                     else {
@@ -477,13 +476,10 @@ int main() {
                     skickat_kommando = 's';
                 }
 
-                unsigned char auto_packet[PACKET_SIZE] = {
-                    0x05,
-                    current_auto_state,
-                    (current_phase == PHASE_PICKUP && aktivt_beslut == 'v') ? 0x01 : 0x00,
-                    skickat_kommando,
-                    line_var, gyro1, gyro2, 0xFF
-                };
+                bool pickup_flag = (current_phase == PHASE_PICKUP && aktivt_beslut == 'v');
+                unsigned char auto_packet[PACKET_SIZE];
+                build_motor_packet(auto_packet, current_auto_state, pickup_flag,
+                                   skickat_kommando, line_var, gyro1, gyro2);
 
                 if (!sim_motor) write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 
@@ -508,19 +504,13 @@ int main() {
         if (gui_known) {
             telemetry_counter++;
             if (telemetry_counter >= 50) {
-                unsigned char telemetry_packet[(PACKET_SIZE+5)] = {
-                    0x06,
-                    (unsigned char)current_phase,
-                    aktivt_beslut,
-                    nasta_beslut,
-                    line_var, gyro1, gyro2, flags,
-                    current_node,
-                    (unsigned char)current_item_index,
-                    (unsigned char)item_count,
-                    (unsigned char)current_dir,
-                    0xFF
-                };
-                sendto(sockfd, telemetry_packet, (PACKET_SIZE+5), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+                unsigned char tpkt[PACKET_SIZE + 5];
+                build_telemetry_packet(tpkt,
+                    (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
+                    line_var, gyro1, gyro2, flags, current_node,
+                    (uint8_t)current_item_index, (uint8_t)item_count,
+                    current_dir);
+                sendto(sockfd, tpkt, (PACKET_SIZE + 5), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                 telemetry_counter = 0;
             }
         }
@@ -531,17 +521,9 @@ int main() {
         if (gui_known && route_changed) {
             route_changed = false;
             int *rutt = (current_phase == PHASE_TO_HOME) ? rutt_hem : rutt_till_vara;
-            int count = 0;
-            while (count < NODES && rutt[count] != STOP) count++;
-            
-            unsigned char route_packet[NODES + 3]; // header + count + nodes + footer
-            route_packet[0] = 0x08;
-            route_packet[1] = (unsigned char)count;
-            for (int i = 0; i < count; i++) {
-                route_packet[2 + i] = (unsigned char)rutt[i];
-            }
-            route_packet[2 + count] = 0xFF;
-            sendto(sockfd, route_packet, 3 + count, 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+            unsigned char rpkt[NODES + 3];
+            int rpkt_len = build_route_packet(rpkt, rutt, NODES);
+            sendto(sockfd, rpkt, rpkt_len, 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
         }
         
         // ---------------------------------------------------------
