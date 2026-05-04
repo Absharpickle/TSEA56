@@ -57,7 +57,7 @@ char get_turn(char nu, char nasta) {
     if (nu == 'w' && nasta == 's') return 'o';
     if (nu == 's' && nasta == 'e') return 'o';
     if (nu == 'e' && nasta == 'n') return 'o';
-    return 'u';
+    return 'b';
 }
 
 char get_motsatt_dir(char nu) {
@@ -160,12 +160,12 @@ void planera_till_vara(int from_node, char from_dir) {
 
 void planera_hem_fran_pickup() {
     int rutt_alt1[NODES], rutt_alt2[NODES];
-    char dir_efter_vanding = get_motsatt_dir(dir_vid_vara);
 
-    int cost_fwd = hitta_rutt(pickup_utgang, START, rutt_alt1, dir_vid_vara);
-    int cost_utn = hitta_rutt(pickup_ingang, START, rutt_alt2, dir_efter_vanding) + 100;
+    int cost_fwd  = hitta_rutt(pickup_utgang, START, rutt_alt1, dir_vid_vara);
+    // Vid backup: roboten backar till pickup_ingang men tittar fortfarande åt dir_vid_vara
+    int cost_back = hitta_rutt(pickup_ingang, START, rutt_alt2, dir_vid_vara) + 100;
 
-    if (cost_fwd <= cost_utn) {
+    if (cost_fwd <= cost_back) {
         memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
         bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
         int dlen = strlen(beslut_hem) + 1;
@@ -176,10 +176,10 @@ void planera_hem_fran_pickup() {
         rutt_hem[0] = pickup_ingang;
     } else {
         memcpy(rutt_hem, rutt_alt2, sizeof(rutt_alt2));
-        bygg_beslut(rutt_hem, dir_efter_vanding, beslut_hem);
+        bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
         int dlen = strlen(beslut_hem) + 1;
         memmove(&beslut_hem[1], &beslut_hem[0], dlen);
-        beslut_hem[0] = 'u';
+        beslut_hem[0] = 'b';
         int rlen = 0; while (rutt_hem[rlen] != STOP) rlen++;
         memmove(&rutt_hem[1], &rutt_hem[0], (rlen + 1) * sizeof(int));
         rutt_hem[0] = pickup_utgang;
@@ -188,20 +188,20 @@ void planera_hem_fran_pickup() {
 
 void planera_nasta_vara() {
     int rutt_tmp[NODES];
-    char dir_efter_vanding = get_motsatt_dir(dir_vid_vara);
 
     int costs[4];
     costs[0] = hitta_rutt(pickup_utgang, vara_u, rutt_tmp, dir_vid_vara);
     costs[1] = hitta_rutt(pickup_utgang, vara_v, rutt_tmp, dir_vid_vara);
-    costs[2] = hitta_rutt(pickup_ingang, vara_u, rutt_tmp, dir_efter_vanding) + 100;
-    costs[3] = hitta_rutt(pickup_ingang, vara_v, rutt_tmp, dir_efter_vanding) + 100;
+    // Vid backup: roboten tittar fortfarande åt dir_vid_vara från pickup_ingang
+    costs[2] = hitta_rutt(pickup_ingang, vara_u, rutt_tmp, dir_vid_vara) + 100;
+    costs[3] = hitta_rutt(pickup_ingang, vara_v, rutt_tmp, dir_vid_vara) + 100;
 
     int best = 0;
     for (int i = 1; i < 4; i++) { if (costs[i] < costs[best]) best = i; }
 
-    bool uturn  = (best >= 2);
-    int from_node = uturn ? pickup_ingang : pickup_utgang;
-    char from_dir = uturn ? dir_efter_vanding : dir_vid_vara;
+    bool backup = (best >= 2);
+    int from_node = backup ? pickup_ingang : pickup_utgang;
+    char from_dir = dir_vid_vara; // Samma riktning oavsett backup eller framåt
     int approach  = (best % 2 == 0) ? vara_u : vara_v;
     int through   = (approach == vara_u) ? vara_v : vara_u;
 
@@ -215,11 +215,11 @@ void planera_nasta_vara() {
 
     int dlen = strlen(beslut_till_vara) + 1;
     memmove(&beslut_till_vara[1], &beslut_till_vara[0], dlen);
-    beslut_till_vara[0] = uturn ? 'u' : 'f';
+    beslut_till_vara[0] = backup ? 'b' : 'f';
 
     int rlen = 0; while (rutt_till_vara[rlen] != STOP) rlen++;
     memmove(&rutt_till_vara[1], &rutt_till_vara[0], (rlen + 1) * sizeof(int));
-    rutt_till_vara[0] = uturn ? pickup_utgang : pickup_ingang;
+    rutt_till_vara[0] = backup ? pickup_utgang : pickup_ingang;
 
     pickup_ingang = approach;
     pickup_utgang = through;

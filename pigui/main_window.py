@@ -53,10 +53,8 @@ class MainWindow(QMainWindow):
         self.top_hlayout.addLayout(right_vlayout)
 
         # --- NETWORKING ---
-        if socket.gethostname() == "joeeb":
-            self.pi_ip = "[IP_ADDRESS_HOME]" # Testing at home
-        else:
-            self.pi_ip = "[IP_ADDRESS_SITE]" # Testing at site
+        self.pi_ip = IP_ADDRESS_HOME # Testing at home
+        #self.pi_ip = IP_ADDRESS_SITE # Testing at site
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.control_sock.bind(("0.0.0.0", 0))
@@ -209,7 +207,7 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(self.target_combo)
         self.control_layout.addStretch()
 
-        lbl_keys = QLabel("Keys: [1234] State | [WA] Target | [↑↓←→SEOU] Wheel | [VH] Arm")
+        lbl_keys = QLabel("Keys: [1234] State | [WA] Target | [↑↓←→SEOB] Wheel | [VH] Arm")
         lbl_keys.setStyleSheet("color: #7f8c8d; font-size: 11px;")
         self.control_layout.addWidget(lbl_keys)
 
@@ -363,7 +361,7 @@ class MainWindow(QMainWindow):
                 Qt.Key.Key_Up: 'f', Qt.Key.Key_Down: 'b',
                 Qt.Key.Key_Right: 'r', Qt.Key.Key_Left: 'l',
                 Qt.Key.Key_S: 's', Qt.Key.Key_E: 'e',
-                Qt.Key.Key_O: 'o', Qt.Key.Key_U: 'u',
+                Qt.Key.Key_O: 'o', Qt.Key.Key_B: 'b',
             }
             action_char = key_map.get(key)
         elif target == "arm":

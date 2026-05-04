@@ -69,7 +69,7 @@ long long current_time_ms() {
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
         aktivt_beslut = beslut_till_vara[index];
-        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
             nasta_beslut = 'f';
         } else if (aktivt_beslut == 'X') {
             nasta_beslut = 'v';
@@ -85,7 +85,7 @@ void aktivt_beslut_fn(int index) {
         }
     } else if (current_phase == PHASE_TO_HOME) {
         aktivt_beslut = beslut_hem[index];
-        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
             nasta_beslut = 'f';
         } else {
             nasta_beslut = beslut_hem[index + 1];
@@ -118,7 +118,7 @@ void start_autonomous_sequence(unsigned char state) {
     current_node = rutt_till_vara[0];
     current_dir  = 's';
 
-    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+    if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
         is_rotating = true;
         action_timer_start = current_time_ms();
     } else if (sim_sensor) {
@@ -312,7 +312,7 @@ int main() {
                 // I riktigt läge: vänta på action_done från styrmodul
                 // I sim-läge: fallback till timer (10500 ms)
                 bool rotation_done = sim_motor 
-                    ? (elapsed_in_state >= 10500) 
+                    ? (elapsed_in_state >= 2000) 
                     : (action_done == 1);
 
                 if (rotation_done) { 
@@ -333,8 +333,8 @@ int main() {
             else if (is_picking_up) {
                 // Steg 1: Stoppa → vänta på action_done → skicka 'v'
                 bool pickup_step_done = sim_motor 
-                    ? (aktivt_beslut == 's' && elapsed_in_state >= 10000) ||
-                      (aktivt_beslut == 'v' && elapsed_in_state >= 20000)
+                    ? (aktivt_beslut == 's' && elapsed_in_state >= 1500) ||
+                      (aktivt_beslut == 'v' && elapsed_in_state >= 3000)
                     : (action_done == 1);
 
                 if (pickup_step_done && aktivt_beslut == 's') {
@@ -366,7 +366,7 @@ int main() {
                         current_action_index = 0;
                         aktivt_beslut_fn(current_action_index);
 
-                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                             is_rotating = true;
                             action_timer_start = current_time_ms();
                         } else if (sim_sensor) {
@@ -382,7 +382,7 @@ int main() {
                         current_action_index = 0;
                         aktivt_beslut_fn(current_action_index);
 
-                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                             is_rotating = true;
                             action_timer_start = current_time_ms();
                         } else if (sim_sensor) {
@@ -431,7 +431,7 @@ int main() {
                         }
                     }
 
-                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o' || aktivt_beslut == 'u') {
+                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                         is_rotating = true;
                         log_next_action = true;
                     }
