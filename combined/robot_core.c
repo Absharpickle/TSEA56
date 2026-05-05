@@ -216,6 +216,11 @@ int main() {
         // ---------------------------------------------------------
         // 1. READ FROM SENSOR (0x10)
         // ---------------------------------------------------------
+
+        bool rotation_done = false;
+        bool pickup_step_done = false;
+        action_done = 0;
+
         unsigned char sensor_raw[PACKET_SIZE];
         if (!sim_sensor && i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
             
@@ -301,19 +306,21 @@ int main() {
 
             // --- Läs action_done från styrmodul (0x12) via I2C ---
             // Latchar flaggan: sätts till 1 här, nollställs bara av state machine
-            if (!sim_motor && i2c_styr_fd >= 0 && !action_done) {
-                unsigned char styr_raw[PACKET_SIZE] = {0};
-                if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
-                    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
-                    if (resp.valid && resp.action_done == 1) {
-                        action_done = 1;
-                    }
-                }
-            }
 
             if (is_rotating) {
                 // I riktigt läge: vänta på action_done från styrmodul
                 // I sim-läge: fallback till timer (10500 ms)
+
+                if (!sim_motor && i2c_styr_fd >= 0 && !action_done) {
+                unsigned char styr_raw[PACKET_SIZE] = {0};
+                if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                    if (resp.valid && resp.action_done == 1) {
+                        rotation_done = true;
+                        action_done = 0;
+                    }
+                }
+            }
                 bool rotation_done = sim_motor 
                     ? (elapsed_in_state >= 2000) 
                     : (action_done == 1);
@@ -335,6 +342,18 @@ int main() {
             } 
             else if (is_picking_up) {
                 // Steg 1: Stoppa → vänta på action_done → skicka 'v'
+
+            if (!sim_motor && i2c_styr_fd >= 0 && !action_done) {
+                unsigned char styr_raw[PACKET_SIZE] = {0};
+                if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                    if (resp.valid && resp.action_done == 1) {
+                        pickup_step_done = true;
+                        action_done = 0;
+                    }
+                }
+            }
+
                 bool pickup_step_done = sim_motor 
                     ? (aktivt_beslut == 's' && elapsed_in_state >= 1500) ||
                       (aktivt_beslut == 'v' && elapsed_in_state >= 3000)
