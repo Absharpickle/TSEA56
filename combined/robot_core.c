@@ -314,7 +314,7 @@ int main() {
 
                 if (sim_motor) {
                     rotation_done = (elapsed_in_state >= 2000);
-                } else if (elapsed_in_state >= 1000 && i2c_styr_fd >= 0 && !rotation_done) {
+                } else if (elapsed_in_state >= 500 && i2c_styr_fd >= 0 && !rotation_done) {
                     unsigned char styr_raw[PACKET_SIZE] = {0};
                     if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
                         StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
@@ -422,7 +422,11 @@ int main() {
                         sim_segment_timer = 0;
                     }
                 } else {
-                    if ((flags_korsning == 2 || flags_korsning == 1) && !korsning_aktiv) {
+                    // flags_korsning == 2: riktig korsning, triggar alltid
+                    // flags_korsning == 1: vara-markör, triggar bara vid upphämtning (nasta_beslut == 'X')
+                    bool real_intersection = (flags_korsning == 2);
+                    bool pickup_marker     = (flags_korsning == 1 && nasta_beslut == 'X');
+                    if ((real_intersection || pickup_marker) && !korsning_aktiv) {
                         intersection_triggered = true;
                         korsning_aktiv    = 1;
                         flags_ny_korsning = 0;
