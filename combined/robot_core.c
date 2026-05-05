@@ -33,6 +33,7 @@ unsigned char current_auto_state = 1;
 bool log_next_action         = false;
 
 bool is_rotating   = false;
+char pending_rotation_cmd = ' '; // Sparar rot-riktning medan den stannar
 bool is_picking_up = false;
 long long action_timer_start = 0;
 uint8_t korsning_aktiv = 0;
@@ -138,6 +139,8 @@ void start_autonomous_sequence(unsigned char state) {
 
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
         is_rotating = true;
+        pending_rotation_cmd = aktivt_beslut; // Spara svängen
+        aktivt_beslut = 's';                  // Skicka stop först
         action_timer_start = current_time_ms();
     } else if (sim_sensor) {
         sim_segment_timer = current_time_ms();
@@ -318,29 +321,45 @@ int main() {
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
             if (is_rotating) {
-                // I riktigt läge: vänta på action_done från styrmodul
-                // Vänta minst 700ms (broms-period) innan vi börjar läsa
+                // Steg 1: Stoppa ('s') -> vänta på action_done -> skicka rotera ('e'/'o')
                 if (sim_motor) {
-                    rotation_done = (elapsed_in_state >= 2000);
-                } else if (elapsed_in_state >= 700 && i2c_styr_fd >= 0 && !rotation_done) {
-                    unsigned char styr_raw[PACKET_SIZE] = {0};
-                    if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                    rotation_done = (aktivt_beslut == 's' && elapsed_in_state >= 1000) ||
+                                    ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
+                } 
+                // VÄNTA minst 300ms innan vi läser I2C
+                else if (elapsed_in_state > 300 && i2c_styr_fd >= 0 && !rotation_done) {
+                    static long long last_rot_read = 0;
+                    if (current_time_ms() - last_rot_read > 50) {
+                        last_rot_read = current_time_ms();
                         
-                        // --- LOGGNING MED SPAM-FILTER ---
-                        static unsigned char last_styr_rot[PACKET_SIZE] = {0};
-                        if (memcmp(styr_raw, last_styr_rot, PACKET_SIZE) != 0) {
-                            log_styr_response(styr_raw);
-                            memcpy(last_styr_rot, styr_raw, PACKET_SIZE);
-                        }
-                        
-                        StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
-                        if (resp.action_done == 1) {
-                            rotation_done = true;
+                        unsigned char styr_raw[PACKET_SIZE] = {0};
+                        if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                            
+                            // --- LOGGNING MED SPAM-FILTER ---
+                            static unsigned char last_styr_rot[PACKET_SIZE] = {0};
+                            if (memcmp(styr_raw, last_styr_rot, PACKET_SIZE) != 0) {
+                                log_styr_response(styr_raw);
+                                memcpy(last_styr_rot, styr_raw, PACKET_SIZE);
+                            }
+                            
+                            StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                            if (resp.action_done == 1) {
+                                rotation_done = true;
+                            }
                         }
                     }
                 }
 
-                if (rotation_done) { 
+                // När styrmodulen är klar med sitt del-steg:
+                if (rotation_done && aktivt_beslut == 's') {
+                    // Stoppet är klart, nu kan vi svänga!
+                    aktivt_beslut = pending_rotation_cmd; 
+                    rotation_done = false; 
+                    action_timer_start = current_time_ms(); 
+                    log_next_action = true;
+                }
+                else if (rotation_done && (aktivt_beslut == 'e' || aktivt_beslut == 'o')) {
+                    // Svängen är klar, vi går vidare!
                     is_rotating   = false;
                     aktivt_beslut = 'f';
                     rotation_done = false;
@@ -357,14 +376,13 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                // Steg 1: Stoppa → vänta på action_done → skicka 'v'
+                // Steg 1: Stoppa ('s') -> vänta på action_done -> skicka 'v'
                 if (sim_motor) {
                     pickup_step_done = (aktivt_beslut == 's' && elapsed_in_state >= 1500) ||
                                        (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
                 } 
                 // VÄNTA minst 300ms innan vi läser I2C
                 else if (elapsed_in_state > 300 && i2c_styr_fd >= 0 && !pickup_step_done) {
-                    // Läs bara I2C var 50:e millisekund (20 Hz) för att inte krascha styrmodulen
                     static long long last_pickup_read = 0;
                     if (current_time_ms() - last_pickup_read > 50) {
                         last_pickup_read = current_time_ms();
@@ -418,6 +436,8 @@ int main() {
 
                         if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                             is_rotating = true;
+                            pending_rotation_cmd = aktivt_beslut;
+                            aktivt_beslut = 's'; // Skicka stop först
                             action_timer_start = current_time_ms();
                         } else if (sim_sensor) {
                             sim_segment_timer = current_time_ms();
@@ -434,6 +454,8 @@ int main() {
 
                         if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                             is_rotating = true;
+                            pending_rotation_cmd = aktivt_beslut;
+                            aktivt_beslut = 's'; // Skicka stop först
                             action_timer_start = current_time_ms();
                         } else if (sim_sensor) {
                             sim_segment_timer = current_time_ms();
@@ -487,6 +509,8 @@ int main() {
 
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                         is_rotating = true;
+                        pending_rotation_cmd = aktivt_beslut; // Spara svängen
+                        aktivt_beslut = 's'; // Force stop first
                         log_next_action = true;
                     }
                     else if (aktivt_beslut == 'X') {
@@ -525,10 +549,6 @@ int main() {
             if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
                 
                 char skickat_kommando = aktivt_beslut;
-                
-                if (is_rotating && (current_time_ms() - action_timer_start < 1000)) {
-                    skickat_kommando = 's';
-                }
 
                 bool pickup_flag = (current_phase == PHASE_PICKUP && aktivt_beslut == 'v');
                 unsigned char auto_packet[PACKET_SIZE];
@@ -583,7 +603,7 @@ int main() {
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
-        usleep(200); 
+        usleep(2000); 
     }
 
     close(sockfd);
