@@ -11,6 +11,7 @@
 #include <linux/i2c-dev.h>
 #include <errno.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "pathfinding.h"
 #include "protocol.h"
@@ -55,15 +56,29 @@ char current_dir = 's';
 uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
-       // Sätts till 1 av styrmodul via I2C när en åtgärd är klar
+// Sätts till 1 av styrmodul via I2C när en åtgärd är klar
 
 // =================================================================
-// HJÄLPFUNKTION: Tidsmätning i millisekunder (endast för sim mode)
+// HJÄLPFUNKTION: Tidsmätning i millisekunder
 // =================================================================
 long long current_time_ms() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+// =================================================================
+// LOGGNING FÖR STYRMODUL (med datum/tid)
+// =================================================================
+void log_styr_response(const unsigned char *received) {
+    FILE *f = fopen(VERIFY_LOG_FILE, "a");
+    if (f == NULL) return;
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    fprintf(f, "[%02d:%02d:%02d] STYR SVAR (0x12): ", t->tm_hour, t->tm_min, t->tm_sec);
+    for (int i = 0; i < PACKET_SIZE; i++) fprintf(f, "%02X ", received[i]);
+    fprintf(f, "\n\n");
+    fclose(f);
 }
 
 // =================================================================
@@ -219,9 +234,6 @@ int main() {
         // ---------------------------------------------------------
         // 1. READ FROM SENSOR (0x10)
         // ---------------------------------------------------------
-
-      
-
         unsigned char sensor_raw[PACKET_SIZE];
         if (!sim_sensor && i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
             
@@ -305,18 +317,22 @@ int main() {
             
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
-            // --- Läs action_done från styrmodul (0x12) via I2C ---
-            // Latchar flaggan: sätts till 1 här, nollställs bara av state machine
-
             if (is_rotating) {
                 // I riktigt läge: vänta på action_done från styrmodul
                 // Vänta minst 700ms (broms-period) innan vi börjar läsa
-
                 if (sim_motor) {
                     rotation_done = (elapsed_in_state >= 2000);
                 } else if (elapsed_in_state >= 700 && i2c_styr_fd >= 0 && !rotation_done) {
                     unsigned char styr_raw[PACKET_SIZE] = {0};
                     if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                        
+                        // --- LOGGNING MED SPAM-FILTER ---
+                        static unsigned char last_styr_rot[PACKET_SIZE] = {0};
+                        if (memcmp(styr_raw, last_styr_rot, PACKET_SIZE) != 0) {
+                            log_styr_response(styr_raw);
+                            memcpy(last_styr_rot, styr_raw, PACKET_SIZE);
+                        }
+                        
                         StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
                         if (resp.action_done == 1) {
                             rotation_done = true;
@@ -342,16 +358,31 @@ int main() {
             } 
             else if (is_picking_up) {
                 // Steg 1: Stoppa → vänta på action_done → skicka 'v'
-
                 if (sim_motor) {
                     pickup_step_done = (aktivt_beslut == 's' && elapsed_in_state >= 1500) ||
                                        (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
-                } else if (i2c_styr_fd >= 0 && !pickup_step_done) {
-                    unsigned char styr_raw[PACKET_SIZE] = {0};
-                    if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
-                        StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
-                        if (resp.action_done == 1) {
-                            pickup_step_done = true;
+                } 
+                // VÄNTA minst 300ms innan vi läser I2C
+                else if (elapsed_in_state > 300 && i2c_styr_fd >= 0 && !pickup_step_done) {
+                    // Läs bara I2C var 50:e millisekund (20 Hz) för att inte krascha styrmodulen
+                    static long long last_pickup_read = 0;
+                    if (current_time_ms() - last_pickup_read > 50) {
+                        last_pickup_read = current_time_ms();
+                        
+                        unsigned char styr_raw[PACKET_SIZE] = {0};
+                        if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                            
+                            // --- LOGGNING MED SPAM-FILTER ---
+                            static unsigned char last_styr_pick[PACKET_SIZE] = {0};
+                            if (memcmp(styr_raw, last_styr_pick, PACKET_SIZE) != 0) {
+                                log_styr_response(styr_raw);
+                                memcpy(last_styr_pick, styr_raw, PACKET_SIZE);
+                            }
+                            
+                            StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                            if (resp.action_done == 1) {
+                                pickup_step_done = true;
+                            }
                         }
                     }
                 }
@@ -359,7 +390,7 @@ int main() {
                 if (pickup_step_done && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
                     pickup_step_done = false; // Nollställ för steg 2
-                    action_timer_start = current_time_ms(); // Reset timer för sim steg 2
+                    action_timer_start = current_time_ms(); // Reset timer för steg 2
                     if (current_item_index + 1 < item_count) {
                         nasta_beslut = 'f';
                     } else {
@@ -548,10 +579,11 @@ int main() {
             int rpkt_len = build_route_packet(rpkt, rutt, NODES);
             sendto(sockfd, rpkt, rpkt_len, 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
         }
+        
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
-        //usleep(200); 
+        usleep(200); 
     }
 
     close(sockfd);
