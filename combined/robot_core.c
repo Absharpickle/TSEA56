@@ -495,7 +495,7 @@ int main() {
                 
                 char skickat_kommando = aktivt_beslut;
                 
-                if (is_rotating && (current_time_ms() - action_timer_start < 500)) {
+                if (is_rotating && (current_time_ms() - action_timer_start < 1000)) {
                     skickat_kommando = 's';
                 }
 
@@ -551,7 +551,7 @@ int main() {
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
-        usleep(200); 
+        //usleep(200); 
     }
 
     close(sockfd);
