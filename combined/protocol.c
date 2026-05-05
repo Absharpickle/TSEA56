@@ -9,7 +9,7 @@
 
 CommandPacket parse_command_packet(const unsigned char *buf, int n) {
     CommandPacket pkt = { .valid = false };
-    if (n == PACKET_SIZE && buf[0] == 0x05 && buf[7] == 0xFF) {
+    if (n == PACKET_SIZE && buf[0] == 0x05) {
         pkt.valid  = true;
         pkt.state  = buf[1];
         pkt.target = buf[2];
@@ -56,8 +56,10 @@ StyrResponse parse_styr_response(const unsigned char *buf, int n) {
 SensorData parse_sensor_packet(const unsigned char *buf) {
     SensorData s;
     s.flags    = buf[0];
-    s.line_var = buf[1];
-    s.angle    = buf[2];
+    s.line_var_f = buf[1];
+    s.line_var_b = buf[2];
+    s.angle    = buf[3];
+    s.ir       = buf[5];
     s.gyro1    = buf[6];
     s.gyro2    = buf[7];
     return s;
@@ -70,20 +72,21 @@ SensorData parse_sensor_packet(const unsigned char *buf) {
 void build_motor_packet(unsigned char out[PACKET_SIZE],
                         uint8_t state, bool is_pickup,
                         char command,
-                        uint8_t line_var, uint8_t gyro1, uint8_t gyro2) {
+                        uint8_t line_var_f, uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2) {
     out[0] = 0x05;
     out[1] = state;
     out[2] = is_pickup ? 0x01 : 0x00;
     out[3] = (unsigned char)command;
-    out[4] = line_var;
-    out[5] = gyro1;
-    out[6] = gyro2;
-    out[7] = 0xFF;
+    out[4] = line_var_f;
+    out[5] = line_var_b;
+    out[6] = gyro1;
+    out[7] = gyro2;
+   
 }
 
 void build_telemetry_packet(unsigned char out[PACKET_SIZE + 6],
                             uint8_t phase, char action, char next_action,
-                            uint8_t line_var, uint8_t gyro1, uint8_t gyro2,
+                            uint8_t line_var_f, uint8_t gyro1, uint8_t gyro2,
                             uint8_t flags, uint8_t node,
                             uint8_t item_idx, uint8_t item_count,
                             char direction, uint8_t action_done) {
@@ -91,7 +94,7 @@ void build_telemetry_packet(unsigned char out[PACKET_SIZE + 6],
     out[1]  = phase;
     out[2]  = (unsigned char)action;
     out[3]  = (unsigned char)next_action;
-    out[4]  = line_var;
+    out[4]  = line_var_f;
     out[5]  = gyro1;
     out[6]  = gyro2;
     out[7]  = flags;

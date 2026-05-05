@@ -161,7 +161,8 @@ int main() {
     unsigned char buffer[BUFFER_SIZE]; 
     socklen_t len = sizeof(cliaddr); 
 
-    uint8_t line_var = 0;
+    uint8_t line_var_f = 0;
+    uint8_t line_var_b = 0;
     uint8_t angle    = 0;
     uint8_t gyro1    = 0;
     uint8_t gyro2    = 0;
@@ -248,7 +249,8 @@ int main() {
             
             SensorData sd = parse_sensor_packet(sensor_raw);
             flags    = sd.flags;
-            line_var = sd.line_var;
+            line_var_f = sd.line_var_f;
+            line_var_b = sd.line_var_b;
             angle    = sd.angle;
             gyro1    = sd.gyro1;
             gyro2    = sd.gyro2;
@@ -277,7 +279,7 @@ int main() {
                     start_autonomous_sequence(cmd.state);
                 } else {
                     unsigned char fwd[PACKET_SIZE];
-                    build_motor_packet(fwd, cmd.state, false, cmd.action, line_var, gyro1, gyro2);
+                    build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
                     fwd[2] = cmd.target; // Behåll target-byte från GUI
                     if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
                     log_verification(fwd, cmd.action);
@@ -295,7 +297,7 @@ int main() {
                     nasta_beslut         = 's';
                 }
                 unsigned char fwd[PACKET_SIZE];
-                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var, gyro1, gyro2);
+                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
                 fwd[2] = cmd.target;
                 if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
                 log_verification(fwd, cmd.action);
@@ -531,7 +533,7 @@ int main() {
                             
                             unsigned char stop_pkt[PACKET_SIZE];
                             build_motor_packet(stop_pkt, current_auto_state, false,
-                                               's', line_var, gyro1, gyro2);
+                                               's', line_var_f, line_var_b, gyro1, gyro2);
                             if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
                         }
                     }
@@ -553,7 +555,7 @@ int main() {
                 bool pickup_flag = (current_phase == PHASE_PICKUP && aktivt_beslut == 'v');
                 unsigned char auto_packet[PACKET_SIZE];
                 build_motor_packet(auto_packet, current_auto_state, pickup_flag,
-                                   skickat_kommando, line_var, gyro1, gyro2);
+                                   skickat_kommando, line_var_f, line_var_b, gyro1, gyro2);
 
                 if (!sim_motor) write(i2c_styr_fd, auto_packet, PACKET_SIZE);
                 
@@ -581,7 +583,7 @@ int main() {
                 unsigned char tpkt[PACKET_SIZE + 6];
                 build_telemetry_packet(tpkt,
                     (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
-                    line_var, gyro1, gyro2, flags, current_node,
+                    line_var_f, gyro1, gyro2, flags, current_node,
                     (uint8_t)current_item_index, (uint8_t)item_count,
                     current_dir, action_done);
                 sendto(sockfd, tpkt, (PACKET_SIZE + 6), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
