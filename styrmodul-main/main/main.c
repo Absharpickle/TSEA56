@@ -243,7 +243,7 @@ void rotate_pid(motor_dir_t spin_dir, uint8_t degrees)
 			motor_set(2, not_spin_dir, 0);
 			//accumulated = 0;
 			action_done = 1;
-			_delay_ms(2000);
+			_delay_ms(300);
 		}
 		prev_error = error;
 

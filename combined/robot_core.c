@@ -310,11 +310,11 @@ int main() {
 
             if (is_rotating) {
                 // I riktigt läge: vänta på action_done från styrmodul
-                // Vänta minst 500ms (broms-period) innan vi börjar läsa
+                // Vänta minst 700ms (broms-period) innan vi börjar läsa
 
                 if (sim_motor) {
                     rotation_done = (elapsed_in_state >= 2000);
-                } else if (elapsed_in_state >= 500 && i2c_styr_fd >= 0 && !rotation_done) {
+                } else if (elapsed_in_state >= 700 && i2c_styr_fd >= 0 && !rotation_done) {
                     unsigned char styr_raw[PACKET_SIZE] = {0};
                     if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
                         StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
@@ -328,6 +328,7 @@ int main() {
                     is_rotating   = false;
                     aktivt_beslut = 'f';
                     rotation_done = false;
+                    korsning_aktiv = 1; // Undvik att nuvarande korsning triggar igen
                     
                     if (current_phase == PHASE_TO_ITEM) {
                         nasta_beslut = beslut_till_vara[current_action_index + 1];
