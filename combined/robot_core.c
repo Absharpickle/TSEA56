@@ -310,9 +310,11 @@ int main() {
 
             if (is_rotating) {
                 // I riktigt läge: vänta på action_done från styrmodul
-                // I sim-läge: fallback till timer (10500 ms)
+                // Vänta minst 500ms (broms-period) innan vi börjar läsa
 
-                if (!sim_motor && i2c_styr_fd >= 0 && !action_done) {
+                if (sim_motor) {
+                    rotation_done = (elapsed_in_state >= 2000);
+                } else if (elapsed_in_state >= 1000 && i2c_styr_fd >= 0 && !rotation_done) {
                     unsigned char styr_raw[PACKET_SIZE] = {0};
                     if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
                         StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
@@ -321,13 +323,11 @@ int main() {
                         }
                     }
                 }
-                // bool rotation_done = sim_motor 
-                //    ? (elapsed_in_state >= 2000) 
-                //    : (action_done == 1);
 
                 if (rotation_done) { 
                     is_rotating   = false;
                     aktivt_beslut = 'f';
+                    rotation_done = false;
                     
                     if (current_phase == PHASE_TO_ITEM) {
                         nasta_beslut = beslut_till_vara[current_action_index + 1];
@@ -342,7 +342,10 @@ int main() {
             else if (is_picking_up) {
                 // Steg 1: Stoppa → vänta på action_done → skicka 'v'
 
-                if (!sim_motor && i2c_styr_fd >= 0 && !action_done) {
+                if (sim_motor) {
+                    pickup_step_done = (aktivt_beslut == 's' && elapsed_in_state >= 1500) ||
+                                       (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
+                } else if (i2c_styr_fd >= 0 && !pickup_step_done) {
                     unsigned char styr_raw[PACKET_SIZE] = {0};
                     if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
                         StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
@@ -352,13 +355,9 @@ int main() {
                     }
                 }
 
-             //   bool pickup_step_done = sim_motor 
-                  //  ? (aktivt_beslut == 's' && elapsed_in_state >= 1500) ||
-                //     (aktivt_beslut == 'v' && elapsed_in_state >= 3000)
-                //    : (action_done == 1);
-
                 if (pickup_step_done && aktivt_beslut == 's') {
                     aktivt_beslut = 'v';
+                    pickup_step_done = false; // Nollställ för steg 2
                     action_timer_start = current_time_ms(); // Reset timer för sim steg 2
                     if (current_item_index + 1 < item_count) {
                         nasta_beslut = 'f';
@@ -371,7 +370,7 @@ int main() {
                 else if (pickup_step_done && aktivt_beslut == 'v') {
                     is_picking_up = false;
                     current_item_index++;
-                    action_done = 0;
+                    pickup_step_done = false;
 
                     if (current_item_index < item_count) {
                         vara_u = item_list_u[current_item_index];
@@ -544,9 +543,6 @@ int main() {
             int rpkt_len = build_route_packet(rpkt, rutt, NODES);
             sendto(sockfd, rpkt, rpkt_len, 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
         }
-        rotation_done = false;
-        pickup_step_done = false;
-        action_done = 0;
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
