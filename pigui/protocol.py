@@ -30,11 +30,11 @@ def build_item_list_packet(item_edges):
 
 
 def parse_telemetry(data):
-    """Parse a 13-byte telemetry packet into a dict. Returns None if invalid."""
-    if len(data) != 13 or data[0] != 0x06 or data[12] != 0xFF:
+    """Parse a 14-byte telemetry packet into a dict. Returns None if invalid."""
+    if len(data) != 14 or data[0] != 0x06 or data[13] != 0xFF:
         return None
     
-    unpacked = struct.unpack('13B', data)
+    unpacked = struct.unpack('14B', data)
     return {
         'phase': unpacked[1],
         'action': chr(unpacked[2]),
@@ -46,5 +46,6 @@ def parse_telemetry(data):
         'current_node': unpacked[8],
         'current_item': unpacked[9],
         'item_count': unpacked[10],
-        'direction': chr(unpacked[11])
+        'direction': chr(unpacked[11]),
+        'action_done': unpacked[12]
     }

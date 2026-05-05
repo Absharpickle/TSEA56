@@ -53,8 +53,8 @@ class MainWindow(QMainWindow):
         self.top_hlayout.addLayout(right_vlayout)
 
         # --- NETWORKING ---
-        self.pi_ip = IP_ADDRESS_HOME # Testing at home
-        #self.pi_ip = IP_ADDRESS_SITE # Testing at site
+        #self.pi_ip = IP_ADDRESS_HOME # Testing at home
+        self.pi_ip = IP_ADDRESS_SITE # Testing at site
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.control_sock.bind(("0.0.0.0", 0))
@@ -225,11 +225,16 @@ class MainWindow(QMainWindow):
         self.lbl_gyro = QLabel("Gyro: (0, 0)")
         self.lbl_flags = QLabel("Flags: 0")
         self.lbl_items_progress = QLabel("Items: -")
+        self.lbl_action_done = QLabel("Done: ●")
+        self.lbl_action_done.setStyleSheet("font-size: 13px; font-weight: bold; color: #e74c3c; padding: 3px;")
 
         for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action,
-                     self.lbl_line, self.lbl_gyro, self.lbl_flags, self.lbl_items_progress]:
+                     self.lbl_line, self.lbl_gyro, self.lbl_flags,
+                     self.lbl_items_progress]:
             lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #ecf0f1; padding: 3px;")
             self.dashboard_layout.addWidget(lbl)
+
+        self.dashboard_layout.addWidget(self.lbl_action_done)
 
         self.layout.addWidget(self.dashboard_frame)
 
@@ -299,6 +304,15 @@ class MainWindow(QMainWindow):
         self.lbl_line.setText(f"Line: {data['line_var']}")
         self.lbl_gyro.setText(f"Gyro: ({data['gyro1']}, {data['gyro2']})")
         self.lbl_flags.setText(f"Flags: {data['flags']}")
+
+        # Action done indicator
+        done = data.get('action_done', 0)
+        if done:
+            self.lbl_action_done.setStyleSheet("font-size: 13px; font-weight: bold; color: #2ecc71; padding: 3px;")
+            self.lbl_action_done.setText("Done: ● YES")
+        else:
+            self.lbl_action_done.setStyleSheet("font-size: 13px; font-weight: bold; color: #e74c3c; padding: 3px;")
+            self.lbl_action_done.setText("Done: ● NO")
 
         item_idx = data.get('current_item', 0)
         item_total = data.get('item_count', 0)

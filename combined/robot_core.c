@@ -300,11 +300,14 @@ int main() {
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
             // --- Läs action_done från styrmodul (0x12) via I2C ---
-            if (!sim_motor && i2c_styr_fd >= 0) {
+            // Latchar flaggan: sätts till 1 här, nollställs bara av state machine
+            if (!sim_motor && i2c_styr_fd >= 0 && !action_done) {
                 unsigned char styr_raw[PACKET_SIZE] = {0};
                 if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
                     StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
-                    if (resp.valid) action_done = resp.action_done;
+                    if (resp.valid && resp.action_done == 1) {
+                        action_done = 1;
+                    }
                 }
             }
 
@@ -504,13 +507,13 @@ int main() {
         if (gui_known) {
             telemetry_counter++;
             if (telemetry_counter >= 50) {
-                unsigned char tpkt[PACKET_SIZE + 5];
+                unsigned char tpkt[PACKET_SIZE + 6];
                 build_telemetry_packet(tpkt,
                     (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
                     line_var, gyro1, gyro2, flags, current_node,
                     (uint8_t)current_item_index, (uint8_t)item_count,
-                    current_dir);
-                sendto(sockfd, tpkt, (PACKET_SIZE + 5), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+                    current_dir, action_done);
+                sendto(sockfd, tpkt, (PACKET_SIZE + 6), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                 telemetry_counter = 0;
             }
         }

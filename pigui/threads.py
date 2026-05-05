@@ -3,6 +3,7 @@ import numpy as np
 import socket
 import struct
 from PyQt6.QtCore import QThread, pyqtSignal
+from protocol import parse_telemetry
 
 
 class VideoThread(QThread):
@@ -36,23 +37,9 @@ class TelemetryThread(QThread):
             try:
                 data, addr = self.sock.recvfrom(1024)
 
-                # 0x06 Telemetry packet (13 bytes)
-                if len(data) == 13 and data[0] == 0x06 and data[12] == 0xFF:
-                    unpacked = struct.unpack('13B', data)
-                    
-                    telemetry_data = {
-                        'phase': unpacked[1],
-                        'action': chr(unpacked[2]), 
-                        'next_action': chr(unpacked[3]),
-                        'line_var': unpacked[4],
-                        'gyro1': unpacked[5],
-                        'gyro2': unpacked[6],
-                        'flags': unpacked[7],
-                        'current_node': unpacked[8],
-                        'current_item': unpacked[9],
-                        'item_count': unpacked[10],
-                        'direction': chr(unpacked[11])
-                    }
+                # 0x06 Telemetry packet (14 bytes)
+                telemetry_data = parse_telemetry(data)
+                if telemetry_data:
                     self.telemetry_signal.emit(telemetry_data)
 
                 # 0x08 Route packet: [0x08, count, node0, node1, ..., 0xFF]
