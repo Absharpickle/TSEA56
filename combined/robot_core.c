@@ -61,7 +61,6 @@ char current_dir = 's';
 uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
-// Sätts till 1 av styrmodul via I2C när en åtgärd är klar
 
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder
@@ -121,6 +120,16 @@ void start_autonomous_sequence(unsigned char state) {
         printf("[!] No items configured. Send item list (0x07) first.\n");
         return;
     }
+
+    // --- RESETTA KARTA OCH ALLA VARIABLER ---
+    init_karta(); 
+    is_rotating          = false;
+    rotation_done        = false;
+    is_picking_up        = false;
+    pickup_step_done     = false;
+    is_dropping          = false;
+    drop_step_done       = false;
+    // ----------------------------------------
 
     current_item_index = 0;
     vara_u = item_list_u[0];
@@ -319,11 +328,6 @@ int main() {
         }
 
         // ---------------------------------------------------------
-        // 1.b Read from motor (0x12)
-        // ---------------------------------------------------------
-
-
-        // ---------------------------------------------------------
         // 2. NETWORK PACKETS
         // ---------------------------------------------------------
         int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
@@ -348,16 +352,33 @@ int main() {
                 }
             } else if (cmd.state == 0x02 || cmd.state == 0x03) {
                 if (current_phase != PHASE_IDLE) {
-                    printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+                    printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route and Resetting Map.\n");
+                    
+                    // --- TOTAL RESET AV STATE MACHINE OCH KARTA ---
+                    init_karta(); // Öppnar alla stängda vägar igen
+                    
                     current_phase        = PHASE_IDLE;
                     is_rotating          = false;
+                    rotation_done        = false;
                     is_picking_up        = false;
+                    pickup_step_done     = false;
                     is_dropping          = false;
+                    drop_step_done       = false;
+                    
                     current_action_index = 0;
                     korsning_aktiv       = 0;
                     aktivt_beslut        = 's';
                     nasta_beslut         = 's';
+                    current_node         = START;
+                    current_dir          = 's';
+                    
+                    // Töm rutt-arrayerna så GUI:t slutar rita strecket
+                    rutt_till_vara[0]    = STOP;
+                    rutt_hem[0]          = STOP;
+                    route_changed        = true; 
+                    // ----------------------------------------------
                 }
+                
                 unsigned char fwd[PACKET_SIZE];
                 build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
                 fwd[2] = cmd.target;
