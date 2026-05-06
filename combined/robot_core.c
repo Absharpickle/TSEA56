@@ -262,10 +262,9 @@ int main() {
                 flags_ny_korsning = (flags & 0x20) >> 4; 
             }
 
-            // Varusida: bits 0-1: 10 (2)=vänster → 'v', 11 (3)=höger → 'r'
-            uint8_t item_side = flags & 0x03;
-            if (item_side == 2)      pickup_cmd = 'v';
-            else if (item_side == 3) pickup_cmd = 'h';
+           
+            if (flags_korsning == 1)      pickup_cmd = 'v';
+            else if (flags_korsning == 3) pickup_cmd = 'h';
         }
 
         // ---------------------------------------------------------
