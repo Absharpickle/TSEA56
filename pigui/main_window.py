@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
         self._setup_dashboard()
         self._start_threads()
 
-        self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME"}
+        self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME", 4: "DROP"}
         self.update_map_highlights()
 
     # =================================================================
