@@ -141,7 +141,7 @@ void start_autonomous_sequence(unsigned char state) {
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
         is_rotating = true;
         pending_rotation_cmd = aktivt_beslut; // Spara svängen
-        aktivt_beslut = 's';                  // Skicka stop först
+        aktivt_beslut = 's';                  // Skicka stop först (från stillastående)
         action_timer_start = current_time_ms();
     } else if (sim_sensor) {
         sim_segment_timer = current_time_ms();
@@ -249,12 +249,12 @@ int main() {
             }
             
             SensorData sd = parse_sensor_packet(sensor_raw);
-            flags    = sd.flags;
+            flags      = sd.flags;
             line_var_f = sd.line_var_f;
             line_var_b = sd.line_var_b;
-            angle    = sd.angle;
-            gyro1    = sd.gyro1;
-            gyro2    = sd.gyro2;
+            angle      = sd.angle;
+            gyro1      = sd.gyro1;
+            gyro2      = sd.gyro2;
 
             flags_korsning = (flags & 0x0C) >> 2;
             
@@ -262,7 +262,6 @@ int main() {
                 flags_ny_korsning = (flags & 0x20) >> 4; 
             }
 
-           
             if (flags_korsning == 1)      pickup_cmd = 'v';
             else if (flags_korsning == 3) pickup_cmd = 'h';
         }
@@ -328,9 +327,9 @@ int main() {
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
             if (is_rotating) {
-                // Steg 1: Stoppa ('s') -> vänta på action_done -> skicka rotera ('e'/'o')
+                // Steg 1: Stoppa ('s' eller 'z') -> vänta på action_done -> skicka rotera ('e'/'o')
                 if (sim_motor) {
-                    rotation_done = (aktivt_beslut == 's' && elapsed_in_state >= 1000) ||
+                    rotation_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1000) ||
                                     ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
                 } 
                 // VÄNTA minst 300ms innan vi läser I2C
@@ -358,7 +357,7 @@ int main() {
                 }
 
                 // När styrmodulen är klar med sitt del-steg:
-                if (rotation_done && aktivt_beslut == 's') {
+                if (rotation_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
                     // Stoppet är klart, nu kan vi svänga!
                     aktivt_beslut = pending_rotation_cmd; 
                     rotation_done = false; 
@@ -383,9 +382,9 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                // Steg 1: Stoppa ('s') -> vänta på action_done -> skicka 'v'
+                // Steg 1: Stoppa ('x') -> vänta på action_done -> skicka 'v'
                 if (sim_motor) {
-                    pickup_step_done = (aktivt_beslut == 's' && elapsed_in_state >= 1500) ||
+                    pickup_step_done = (aktivt_beslut == 'x' && elapsed_in_state >= 1500) ||
                                        (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
                 } 
                 // VÄNTA minst 300ms innan vi läser I2C
@@ -412,7 +411,7 @@ int main() {
                     }
                 }
 
-                if (pickup_step_done && aktivt_beslut == 's') {
+                if (pickup_step_done && aktivt_beslut == 'x') {
                     aktivt_beslut = pickup_cmd;
                     pickup_step_done = false; // Nollställ för steg 2
                     action_timer_start = current_time_ms(); // Reset timer för steg 2
@@ -444,7 +443,7 @@ int main() {
                         if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                             is_rotating = true;
                             pending_rotation_cmd = aktivt_beslut;
-                            aktivt_beslut = 's'; // Skicka stop först
+                            aktivt_beslut = 's'; // Skicka stop först (står redan stilla)
                             action_timer_start = current_time_ms();
                         } else if (sim_sensor) {
                             sim_segment_timer = current_time_ms();
@@ -462,7 +461,7 @@ int main() {
                         if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                             is_rotating = true;
                             pending_rotation_cmd = aktivt_beslut;
-                            aktivt_beslut = 's'; // Skicka stop först
+                            aktivt_beslut = 's'; // Skicka stop först (står redan stilla)
                             action_timer_start = current_time_ms();
                         } else if (sim_sensor) {
                             sim_segment_timer = current_time_ms();
@@ -497,6 +496,9 @@ int main() {
                 }
 
                 if (intersection_triggered) {
+                    // Spara vad vi gjorde innan korsningen (t.ex. 'b' för backning)
+                    char previous_action = aktivt_beslut;
+
                     current_action_index++;
                     aktivt_beslut_fn(current_action_index);
                     action_timer_start = current_time_ms();
@@ -517,13 +519,15 @@ int main() {
                     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
                         is_rotating = true;
                         pending_rotation_cmd = aktivt_beslut; // Spara svängen
-                        aktivt_beslut = 's'; // Force stop first
+                        
+                        // Om vi just backade ('b'), skicka 'z'. Annars 's'.
+                        aktivt_beslut = (previous_action == 'b') ? 'z' : 's'; 
                         log_next_action = true;
                     }
                     else if (aktivt_beslut == 'X') {
                         if (current_phase == PHASE_TO_ITEM) {
                             current_phase = PHASE_PICKUP;
-                            aktivt_beslut = 's';
+                            aktivt_beslut = 'x'; // Skicka 'x' när vi stannar för pickup
                             nasta_beslut  = pickup_cmd;
                             is_picking_up = true;
                             printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
@@ -532,13 +536,14 @@ int main() {
                         else if (current_phase == PHASE_TO_HOME) {
                             current_phase = PHASE_IDLE;
                             current_node  = START;
-                            aktivt_beslut = 's';
+                            // Om vi just backade in i mål, skicka 'z'. Annars 's'.
+                            aktivt_beslut = (previous_action == 'b') ? 'z' : 's'; 
                             nasta_beslut  = 's';
                             printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
                             
                             unsigned char stop_pkt[PACKET_SIZE];
                             build_motor_packet(stop_pkt, current_auto_state, false,
-                                               's', line_var_f, line_var_b, gyro1, gyro2);
+                                               aktivt_beslut, line_var_f, line_var_b, gyro1, gyro2);
                             if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
                         }
                     }
