@@ -303,7 +303,7 @@ int main() {
                     nasta_beslut         = 's';
                 }
                 unsigned char fwd[PACKET_SIZE];
-                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var, gyro1, gyro2);
+                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
                 fwd[2] = cmd.target;
                 if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
                 log_verification(fwd, cmd.action);
