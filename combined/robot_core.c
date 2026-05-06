@@ -259,6 +259,55 @@ int main() {
             gyro1      = sd.gyro1;
             gyro2      = sd.gyro2;
 
+            // --- NY HINDERDETEKTERING ---
+            // Om vi rör oss framåt och IR visar ett hinder inom 80 cm
+            if (sd.ir > 0 && sd.ir <= 80 && (current_phase == PHASE_TO_ITEM || current_phase == PHASE_TO_HOME) && aktivt_beslut == 'f') {
+                int next_node = -1;
+                
+                // Räkna ut vilken nod vi är på väg till just nu
+                if (current_phase == PHASE_TO_ITEM && current_action_index + 1 >= 0) {
+                    next_node = rutt_till_vara[current_action_index + 1];
+                } else if (current_phase == PHASE_TO_HOME && current_action_index + 1 >= 0) {
+                    next_node = rutt_hem[current_action_index + 1];
+                }
+
+                if (next_node != -1 && next_node != STOP) {
+                    int blocked_u = next_node;
+                    int blocked_v = blocked_u;
+
+                    // Räkna ut noden EFTER den vi är på väg till, beroende på väderstreck
+                    if (current_dir == 'n') blocked_v -= 5;
+                    else if (current_dir == 's') blocked_v += 5;
+                    else if (current_dir == 'e') blocked_v += 1;
+                    else if (current_dir == 'w') blocked_v -= 1;
+
+                    // Kolla att noden ligger på gridet och att vägen inte redan är borttagen
+                    if (blocked_v >= 0 && blocked_v < 25 && vag[blocked_u][blocked_v] == 1) {
+                        printf("\n[!] HINDER DETEKTERAT (IR=%d cm)! Stänger av väg %d <-> %d och räknar om...\n", sd.ir, blocked_u, blocked_v);
+                        
+                        // Klipp vägen i båda riktningar
+                        vag[blocked_u][blocked_v] = 0;
+                        vag[blocked_v][blocked_u] = 0;
+
+                        // Räkna om rutten med den framförvarande noden som ny startpunkt
+                        if (current_phase == PHASE_TO_ITEM) {
+                            planera_till_vara(next_node, current_dir); // Ruttar om oavsett om det är vara 1, 2 eller 3
+                            
+                            // VIKTIGT: När rutten räknas om kan approach-riktningen ändras.
+                            // Vi måste uppdatera den pre-kalkylerade hemrutten utifrån den nya parkeringen.
+                            planera_hem_fran_pickup(); 
+                            
+                            current_action_index = -1; // Gör att nästa korsning läser beslut[0]
+                        } else if (current_phase == PHASE_TO_HOME) {
+                            planera_hem_fran_nod(next_node, current_dir);
+                            current_action_index = -1;
+                        }
+                        route_changed = true; // Flagga att GUI ska ha den nya rutten
+                    }
+                }
+            }
+            // -----------------------------
+
             flags_korsning = (flags & 0x0C) >> 2;
             
             if (!flags_ny_korsning) {
