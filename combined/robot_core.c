@@ -35,6 +35,7 @@ bool log_next_action         = false;
 bool is_rotating   = false;
 char pending_rotation_cmd = ' '; // Sparar rot-riktning medan den stannar
 bool is_picking_up = false;
+char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'r' (höger)
 long long action_timer_start = 0;
 uint8_t korsning_aktiv = 0;
 
@@ -91,12 +92,12 @@ void aktivt_beslut_fn(int index) {
         if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
             nasta_beslut = 'f';
         } else if (aktivt_beslut == 'X') {
-            nasta_beslut = 'v';
+            nasta_beslut = pickup_cmd;
         } else {
             nasta_beslut = beslut_till_vara[index + 1];
         }
     } else if (current_phase == PHASE_PICKUP) {
-        aktivt_beslut = 'v';
+        aktivt_beslut = pickup_cmd;
         if (current_item_index + 1 < item_count) {
             nasta_beslut = 'f';
         } else {
@@ -258,6 +259,11 @@ int main() {
             if (!flags_ny_korsning) {
                 flags_ny_korsning = (flags & 0x20) >> 4; 
             }
+
+            // Varusida: bits 0-1: 10 (2)=vänster → 'v', 11 (3)=höger → 'r'
+            uint8_t item_side = flags & 0x03;
+            if (item_side == 2)      pickup_cmd = 'v';
+            else if (item_side == 3) pickup_cmd = 'r';
         }
 
         // ---------------------------------------------------------
@@ -284,22 +290,26 @@ int main() {
                     printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
                 }
             } else if (cmd.state == 0x02 || cmd.state == 0x03) {
-                if (current_phase != PHASE_IDLE) {
-                    printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
-                    current_phase        = PHASE_IDLE;
-                    is_rotating          = false;
-                    is_picking_up        = false;
-                    current_action_index = 0;
-                    korsning_aktiv       = 0;
-                    aktivt_beslut        = 's';
-                    nasta_beslut         = 's';
+                if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
+                    start_autonomous_sequence(cmd.state);
+                } else {
+                    if (current_phase != PHASE_IDLE) {
+                        printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+                        current_phase        = PHASE_IDLE;
+                        is_rotating          = false;
+                        is_picking_up        = false;
+                        current_action_index = 0;
+                        korsning_aktiv       = 0;
+                        aktivt_beslut        = 's';
+                        nasta_beslut         = 's';
+                    }
+                    unsigned char fwd[PACKET_SIZE];
+                    build_motor_packet(fwd, cmd.state, false, cmd.action, line_var, gyro1, gyro2);
+                    fwd[2] = cmd.target;
+                    if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
+                    log_verification(fwd, cmd.action);
+                    printf("-> Auto Test Command Forwarded: '%c'\n", cmd.action);
                 }
-                unsigned char fwd[PACKET_SIZE];
-                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var, gyro1, gyro2);
-                fwd[2] = cmd.target;
-                if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
-                log_verification(fwd, cmd.action);
-                printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
             }
         }
 
@@ -406,7 +416,7 @@ int main() {
                 }
 
                 if (pickup_step_done && aktivt_beslut == 's') {
-                    aktivt_beslut = 'v';
+                    aktivt_beslut = pickup_cmd;
                     pickup_step_done = false; // Nollställ för steg 2
                     action_timer_start = current_time_ms(); // Reset timer för steg 2
                     if (current_item_index + 1 < item_count) {
@@ -417,7 +427,7 @@ int main() {
                     log_next_action = true;
                 }
                 // Steg 2: Pickup klar → planera nästa
-                else if (pickup_step_done && aktivt_beslut == 'v') {
+                else if (pickup_step_done && (aktivt_beslut == 'v' || aktivt_beslut == 'r')) {
                     is_picking_up = false;
                     current_item_index++;
                     pickup_step_done = false;
@@ -517,7 +527,7 @@ int main() {
                         if (current_phase == PHASE_TO_ITEM) {
                             current_phase = PHASE_PICKUP;
                             aktivt_beslut = 's';
-                            nasta_beslut  = 'v';
+                            nasta_beslut  = pickup_cmd;
                             is_picking_up = true;
                             printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
                             log_next_action = true;
@@ -550,7 +560,7 @@ int main() {
                 
                 char skickat_kommando = aktivt_beslut;
 
-                bool pickup_flag = (current_phase == PHASE_PICKUP && aktivt_beslut == 'v');
+                bool pickup_flag = (current_phase == PHASE_PICKUP && (aktivt_beslut == 'v' || aktivt_beslut == 'r'));
                 unsigned char auto_packet[PACKET_SIZE];
                 build_motor_packet(auto_packet, current_auto_state, pickup_flag,
                                    skickat_kommando, line_var, gyro1, gyro2);
@@ -603,7 +613,7 @@ int main() {
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
-        usleep(2000); 
+        usleep(25000); 
     }
 
     close(sockfd);
