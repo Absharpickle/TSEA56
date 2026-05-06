@@ -483,9 +483,10 @@ int main() {
                     }
                 } else {
                     // flags_korsning == 2: riktig korsning, triggar alltid
-                    // flags_korsning == 1: vara-markör, triggar bara vid upphämtning (nasta_beslut == 'X')
+                    // flags_korsning == 1 (vänster) eller 3 (höger): vara-markör, triggar bara vid upphämtning (nasta_beslut == 'X')
                     bool real_intersection = (flags_korsning == 2);
-                    bool pickup_marker     = (flags_korsning == 1 && nasta_beslut == 'X');
+                    bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X');
+                    
                     if ((real_intersection || pickup_marker) && !korsning_aktiv) {
                         intersection_triggered = true;
                         korsning_aktiv    = 1;
