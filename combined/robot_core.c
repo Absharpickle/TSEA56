@@ -265,7 +265,7 @@ int main() {
             // Varusida: bits 0-1: 10 (2)=vänster → 'v', 11 (3)=höger → 'r'
             uint8_t item_side = flags & 0x03;
             if (item_side == 2)      pickup_cmd = 'v';
-            else if (item_side == 3) pickup_cmd = 'r';
+            else if (item_side == 3) pickup_cmd = 'h';
         }
 
         // ---------------------------------------------------------
@@ -425,7 +425,7 @@ int main() {
                     log_next_action = true;
                 }
                 // Steg 2: Pickup klar → planera nästa
-                else if (pickup_step_done && (aktivt_beslut == 'v' || aktivt_beslut == 'r')) {
+                else if (pickup_step_done && (aktivt_beslut == 'v' || aktivt_beslut == 'h')) {
                     is_picking_up = false;
                     current_item_index++;
                     pickup_step_done = false;
@@ -558,7 +558,7 @@ int main() {
                 
                 char skickat_kommando = aktivt_beslut;
 
-                bool pickup_flag = (current_phase == PHASE_PICKUP && (aktivt_beslut == 'v' || aktivt_beslut == 'r'));
+                bool pickup_flag = (current_phase == PHASE_PICKUP && (aktivt_beslut == 'v' || aktivt_beslut == 'h'));
                 unsigned char auto_packet[PACKET_SIZE];
                 build_motor_packet(auto_packet, current_auto_state, pickup_flag,
                                    skickat_kommando, line_var_f, line_var_b, gyro1, gyro2);
