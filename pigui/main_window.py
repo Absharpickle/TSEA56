@@ -53,8 +53,8 @@ class MainWindow(QMainWindow):
         self.top_hlayout.addLayout(right_vlayout)
 
         # --- NETWORKING ---
-        #self.pi_ip = IP_ADDRESS_HOME # Testing at home
-        self.pi_ip = IP_ADDRESS_SITE # Testing at site
+        self.pi_ip = IP_ADDRESS_HOME # Testing at home
+        #self.pi_ip = IP_ADDRESS_SITE # Testing at site
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.control_sock.bind(("0.0.0.0", 0))

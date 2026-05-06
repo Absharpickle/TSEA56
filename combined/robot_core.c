@@ -24,7 +24,8 @@ typedef enum {
     PHASE_IDLE = 0,
     PHASE_TO_ITEM,
     PHASE_PICKUP,
-    PHASE_TO_HOME
+    PHASE_TO_HOME,
+    PHASE_DROP
 } AutoPhase;
 
 AutoPhase current_phase      = PHASE_IDLE;
@@ -237,7 +238,7 @@ int main() {
     // =============================================================
     while (1) {
         // ---------------------------------------------------------
-        // 1. READ FROM SENSOR (0x10)
+        // 1.a READ FROM SENSOR (0x10)
         // ---------------------------------------------------------
         unsigned char sensor_raw[PACKET_SIZE];
         if (!sim_sensor && i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
@@ -265,6 +266,11 @@ int main() {
             if (flags_korsning == 1)      pickup_cmd = 'v';
             else if (flags_korsning == 3) pickup_cmd = 'h';
         }
+
+        // ---------------------------------------------------------
+        // 1.b Read from motor (0x12)
+        // ---------------------------------------------------------
+
 
         // ---------------------------------------------------------
         // 2. NETWORK PACKETS
@@ -365,7 +371,7 @@ int main() {
                     log_next_action = true;
                 }
                 else if (rotation_done && (aktivt_beslut == 'e' || aktivt_beslut == 'o')) {
-                    // Svängen är klar, vi går vidare!
+                    // Svängen är klar, vi går vidare
                     is_rotating   = false;
                     aktivt_beslut = 'f';
                     rotation_done = false;
@@ -534,12 +540,24 @@ int main() {
                             printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
                             log_next_action = true;
                         }
+
+
                         else if (current_phase == PHASE_TO_HOME) {
+                            current_phase = PHASE_DROP;
+                            aktivt_beslut = (previous_action == 'b') ? 'z' : 's';
+                            nasta_beslut = 'w';
+                            is_dropping = true;
+                            printf("\n-> Drop item %d/%d...\n", current_item_index + 1, item_count);
+                            log_next_action = true;
+                        }
+
+
+                        else if (current_phase == PHASE_DROP) {
                             current_phase = PHASE_IDLE;
                             current_node  = START;
-                            // Om vi just backade in i mål, skicka 'z'. Annars 's'.
-                            aktivt_beslut = (previous_action == 'b') ? 'z' : 's'; 
-                            nasta_beslut  = 's';
+                            aktivt_beslut = 'w';
+                            nasta_beslut = 's';
+                            is_dropping = false;
                             printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
                             
                             unsigned char stop_pkt[PACKET_SIZE];
