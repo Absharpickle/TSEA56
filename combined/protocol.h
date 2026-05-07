@@ -77,14 +77,13 @@ void build_motor_packet(unsigned char out[PACKET_SIZE],
                         char command,
                         uint8_t line_var_f, uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2);
 
-// Bygg ett 15-byte telemetripaket (0x06) för UDP till GUI.
-void build_telemetry_packet(unsigned char out[PACKET_SIZE + 7],
+// Bygg ett 14-byte telemetripaket (0x06) för UDP till GUI.
+void build_telemetry_packet(unsigned char out[PACKET_SIZE + 6],
                             uint8_t phase, char action, char next_action,
                             uint8_t line_var_f, uint8_t gyro1, uint8_t gyro2,
                             uint8_t flags, uint8_t node,
                             uint8_t item_idx, uint8_t item_count,
-                            char direction, uint8_t action_done,
-                            uint8_t ir_distance);
+                            char direction, uint8_t action_done);
 
 // Bygg ett variabellängt ruttpaket (0x08) för UDP till GUI.
 // Returnerar paketlängden.

@@ -1,6 +1,5 @@
 #include "pathfinding.h"
 #include <string.h>
-#include <stdio.h>
 #include <stdbool.h>
 
 // =================================================================
@@ -229,17 +228,4 @@ void planera_nasta_vara() {
     pickup_ingang = approach;
     pickup_utgang = through;
     dir_vid_vara  = nodriktningsmatris[approach][through];
-}
-
-// Ny funktion för att akut planera vägen hem från en specifik nod
-void planera_hem_fran_nod(int from_node, char from_dir) {
-    // Hitta kortaste rutt tillbaka till START
-    int kostnad = hitta_rutt(from_node, START, rutt_hem, from_dir);
-    
-    if (kostnad >= 9999) {
-        printf("[!] VARNING: Ingen giltig rutt hem hittades runt hindret!\n");
-    }
-    
-    // Bygg nya beslut
-    bygg_beslut(rutt_hem, from_dir, beslut_hem);
 }

@@ -39,6 +39,5 @@ int  hitta_rutt(int start, int mal, int rutt[], char start_dir);
 void planera_till_vara(int from_node, char from_dir);
 void planera_hem_fran_pickup();
 void planera_nasta_vara();
-void planera_hem_fran_nod(int from_node, char from_dir);
 
 #endif // PATHFINDING_H
