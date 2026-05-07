@@ -2,7 +2,7 @@ import cv2
 import socket
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QComboBox, QFrame, QGridLayout,
-                             QSizePolicy, QPushButton, QListWidget)
+                             QSizePolicy, QPushButton)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPixmap
 
@@ -10,7 +10,8 @@ from threads import VideoThread, TelemetryThread
 from map_widget import MapFrame
 from protocol import build_command_packet, build_item_list_packet
 
-IP_ADDRESS_SITE = "10.42.0.1"  # Ändra vid behov
+# Nätverksinställningar
+IP_ADDRESS_SITE = "10.42.0.1"
 PI_PORT = 5001
 
 class MainWindow(QMainWindow):
@@ -36,51 +37,51 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
         
-        # --- TOP LAYOUT (Video & Map) ---
+        # --- TOP LAYOUT (Video & Karta) ---
         self.top_hlayout = QHBoxLayout()
         self.layout.addLayout(self.top_hlayout)
 
-        # Video
+        # Videofönster
         self.image_label = QLabel("Väntar på video...")
         self.image_label.setFixedSize(480, 360)
         self.image_label.setStyleSheet("background-color: black; border: 1px solid #7f8c8d;")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.top_hlayout.addWidget(self.image_label)
 
-        # Karta (MapWidget)
-        from pathfinding import NODES # Importera noder för referens om det behövs
-        self.map_frame = MapFrame(range(26)) # Skickar med 26 noder (0-25)
+        # Kartfönster (MapFrame) - Vi använder range(26) för noder 0-25
+        self.map_frame = MapFrame(range(26))
         self.top_hlayout.addWidget(self.map_frame)
 
-        # --- BOTTOM LAYOUT (Controls & Dashboard) ---
+        # --- BOTTOM LAYOUT (Instrumentpanel & Kontroller) ---
         self.bottom_hlayout = QHBoxLayout()
         self.layout.addLayout(self.bottom_hlayout)
 
-        # Dashboard (Sensor Data)
+        # Instrumentpanel (Sensor Data)
         self._setup_dashboard()
         
-        # Controls (Combo boxes)
+        # Kontrollpanel (Inställningar)
         self._setup_controls()
 
-        # --- NETWORKING & THREADS ---
+        # --- NÄTVERK & TRÅDAR ---
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         
-        # Video Thread
+        # Videotråd
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.start()
 
-        # Telemetry Thread
+        # Telemetritråd
         self.telemetry_thread = TelemetryThread(self.control_sock)
         self.telemetry_thread.telemetry_signal.connect(self.update_telemetry)
         self.telemetry_thread.route_signal.connect(self.map_frame.set_route)
         self.telemetry_thread.start()
 
-        # State för ruttplanering
+        # Ruttplaneringsstatus
         self.item_edges = []
         self.map_frame.edge_clicked.connect(self.add_item_to_list)
 
     def _setup_dashboard(self):
+        """Skapar instrumentpanelen för sensordata."""
         self.dashboard_frame = QFrame()
         self.dashboard_frame.setObjectName("Dashboard")
         self.dashboard_layout = QGridLayout(self.dashboard_frame)
@@ -91,7 +92,7 @@ class MainWindow(QMainWindow):
         self.action_label = QLabel("Aktion: --")
         self.line_label = QLabel("Linje-var: --")
         
-        # NYA LABELS: IR och Hinder
+        # IR-avstånd och hinderstatus
         self.ir_label = QLabel("IR Avstånd: --")
         self.hinder_label = QLabel("Väg: Klar")
         self.hinder_label.setStyleSheet("font-weight: bold; color: #2ecc71;")
@@ -106,6 +107,7 @@ class MainWindow(QMainWindow):
         self.bottom_hlayout.addWidget(self.dashboard_frame)
 
     def _setup_controls(self):
+        """Skapar kontrollpanelen för körlägen."""
         control_panel = QVBoxLayout()
         
         self.state_combo = QComboBox()
@@ -129,11 +131,8 @@ class MainWindow(QMainWindow):
         
         self.bottom_hlayout.addLayout(control_panel)
 
-    # =================================================================
-    # SLOTS & UPDATES
-    # =================================================================
     def update_telemetry(self, data):
-        """Hanterar inkommande 15-byte telemetri-dict från threads.py"""
+        """Uppdaterar GUI med data från roboten."""
         phases = ["IDLE", "TILL VARA", "UPPHÄMTNING", "HEM", "AVLÄMNING"]
         p_idx = data['phase']
         phase_str = phases[p_idx] if p_idx < len(phases) else f"UNKNOWN ({p_idx})"
@@ -143,7 +142,7 @@ class MainWindow(QMainWindow):
         self.action_label.setText(f"Nu: {data['action']} | Nästa: {data['next_action']}")
         self.line_label.setText(f"Linje-var: {data['line_var']}")
         
-        # Uppdatera IR-avstånd (Index 13 i paketet)
+        # Uppdatera IR-avstånd
         ir_val = data['ir_distance']
         self.ir_label.setText(f"IR Avstånd: {ir_val}")
 
@@ -157,45 +156,49 @@ class MainWindow(QMainWindow):
             self.hinder_label.setStyleSheet("font-weight: bold; color: #2ecc71;") # Grön
 
     def update_image(self, cv_img):
+        """Konverterar och visar videoframes."""
         rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         qt_img = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
         self.image_label.setPixmap(QPixmap.fromImage(qt_img))
 
     def add_item_to_list(self, edge):
+        """Lägger till en vara när en kant klickas i kartan."""
         self.item_edges.append(edge)
         self.map_frame.set_item_edges(self.item_edges)
 
     def clear_items(self):
+        """Rensar alla valda varor."""
         self.item_edges = []
         self.map_frame.set_item_edges([])
         self.map_frame.set_route([])
 
     def keyPressEvent(self, event):
-        """Hanterar manuell körning via tangentbordet"""
+        """Hanterar manuell styrning."""
         key_map = {
             Qt.Key.Key_W: 'f',
             Qt.Key.Key_S: 'b',
             Qt.Key.Key_A: 'v',
             Qt.Key.Key_D: 'h',
             Qt.Key.Key_Space: 's',
-            Qt.Key.Key_Enter: 'f', # Starta autonomt
+            Qt.Key.Key_Enter: 'f',
             Qt.Key.Key_Return: 'f'
         }
         if event.key() in key_map:
             self.send_packet(key_map[event.key()])
 
     def send_packet(self, action_char):
+        """Bygger och skickar UDP-paket till roboten."""
         current_state = self.state_combo.currentData()
         current_target = self.target_combo.currentData()
 
-        # Om vi startar autonomt ('f' i IDLE), skicka varulistan först
+        # Skicka varulistan om vi startar autonom körning
         if current_state in (0x00, 0x01) and action_char == 'f' and self.item_edges:
             packet = build_item_list_packet(self.item_edges)
             if packet:
                 self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
 
-        # Skicka huvudkommandot
+        # Skicka körkommando
         packet = build_command_packet(current_state, current_target, action_char)
         try:
             self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
