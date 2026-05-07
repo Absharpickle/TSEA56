@@ -42,6 +42,10 @@ bool drop_step_done = false;
 long long action_timer_start = 0;
 uint8_t korsning_aktiv = 0;
 
+// NYTT: State för att stanna och räkna om rutt
+bool is_recalculating = false;
+long long recalc_timer_start = 0;
+
 // --- SIM MODE GLOBALS ---
 bool sim_sensor = false;
 bool sim_motor  = false;
@@ -145,6 +149,7 @@ void start_autonomous_sequence(unsigned char state) {
     current_action_index = 0;
     korsning_aktiv       = 0;
     loop_counter         = 0;
+    is_recalculating     = false;
 
     aktivt_beslut_fn(current_action_index);
     current_node = rutt_till_vara[0];
@@ -270,7 +275,7 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
     if (cmd.valid) {
         if (cmd.state == 0x00 || cmd.state == 0x01) {
             if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
-                init_karta(); // ÅTERSTÄLLER KARTAN INFÖR NY KÖRNING!
+                init_karta(); 
                 start_autonomous_sequence(cmd.state);
             } else {
                 unsigned char fwd[PACKET_SIZE];
@@ -285,12 +290,13 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
                 is_rotating          = false;
                 is_picking_up        = false;
                 is_dropping          = false;
+                is_recalculating     = false; // NYTT: Nollställ omkalkylering vid avbrott
                 current_action_index = 0;
                 korsning_aktiv       = 0;
                 aktivt_beslut        = 's';
                 nasta_beslut         = 's';
                 
-                init_karta(); // ÅTERSTÄLLER KARTAN VID MANUELLT AVBROTT!
+                init_karta(); 
                 route_changed = true;
             }
             unsigned char fwd[PACKET_SIZE];
@@ -310,7 +316,6 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
     }
 }
 
-// NYTT: flags ligger tillagt som sista parameter här
 void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2, uint8_t flags_korsning, uint8_t *flags_ny_korsning, uint8_t flags) {
     if (current_phase == PHASE_IDLE) return;
     
@@ -320,31 +325,27 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     static uint8_t last_hinder = 0;
     uint8_t hinder_upptackt = (flags & 0x10) >> 4;
     
-    // Vi kollar bara hinder när vi faktiskt kör mellan noder (inte roterar/plockar/droppar)
     if (hinder_upptackt == 1 && last_hinder == 0 && 
         (current_phase == PHASE_TO_ITEM || current_phase == PHASE_TO_HOME) &&
-        !is_rotating && !is_picking_up && !is_dropping) {
+        !is_rotating && !is_picking_up && !is_dropping && !is_recalculating) { // NYTT: Kolla så vi inte redan räknar om
         
         int *current_route = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
-        int target_node = current_route[current_action_index + 1]; // Noden vi just nu åker mot
+        int target_node = current_route[current_action_index + 1]; 
         
         if (target_node != STOP && target_node >= 0 && target_node <= 24) {
             int blocked_node = -1;
             
-            // Kolla vilken nod som kommer efter target_node i vår nuvarande riktning
             if (current_dir == 'n') blocked_node = target_node - 5;
             else if (current_dir == 's') blocked_node = target_node + 5;
             else if (current_dir == 'e') blocked_node = target_node + 1;
             else if (current_dir == 'w') blocked_node = target_node - 1;
             
-            // Om blockerad nod är rimlig inuti grafen, klipp bort vägen!
-            if (blocked_node >= 0 && blocked_node <= 24) {
-                printf("\n[!] HINDER UPPTÄCKT! Klipper kanten %d <-> %d\n", target_node, blocked_node);
+            if (blocked_node >= 0 && blocked_node <= 24 && vag[target_node][blocked_node] != 0) {
+                printf("\n[!] HINDER UPPTÄCKT! Stannar och klipper kanten %d <-> %d\n", target_node, blocked_node);
                 vag[target_node][blocked_node] = 0;
                 vag[blocked_node][target_node] = 0;
                 
-                // Beräkna om rutten. Vi byter ut arrayen men vi startar OMKALKYLERINGEN
-                // från `target_node`, med kompassen `current_dir`.
+                // Beräkna om rutten
                 if (current_phase == PHASE_TO_ITEM) {
                     planera_till_vara(target_node, current_dir);
                 } else if (current_phase == PHASE_TO_HOME) {
@@ -352,11 +353,15 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                     bygg_beslut(rutt_hem, current_dir, beslut_hem);
                 }
                 
-                // Geni-drag: Genom att sätta detta till -1, kommer den understa 
-                // koden för 'intersection_triggered' att plussa den till 0 sekunden vi rullar in i 
-                // target_node, vilket gör att den laddar beslut 0 av den splitternya rutten!
                 current_action_index = -1;
                 route_changed = true;
+
+                // --- NYTT: Gå in i Recalculating State ---
+                is_recalculating = true;
+                aktivt_beslut = 's'; // Skickar stopp-kommando till motorerna
+                recalc_timer_start = current_time_ms(); // Startar timern
+                log_next_action = true;
+                // -----------------------------------------
             }
         }
     }
@@ -365,7 +370,18 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
 
     long long elapsed_in_state = current_time_ms() - action_timer_start;
 
-    if (is_rotating) {
+    // --- NYTT: Hantera fördröjningen ---
+    if (is_recalculating) {
+        // Vi väntar 1000ms så roboten står still, och ritar om gui.
+        if (current_time_ms() - recalc_timer_start > 1000) {
+            is_recalculating = false;
+            aktivt_beslut = 'f'; // Återuppta och kör framåt mot target_node!
+            log_next_action = true;
+            printf("-> Omkalkylering klar. Fortsätter framåt!\n");
+        }
+    }
+    // -----------------------------------
+    else if (is_rotating) {
         if (sim_motor) {
             rotation_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1000) ||
                             ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
@@ -461,8 +477,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                 vara_u = item_list_u[current_item_index];
                 vara_v = item_list_v[current_item_index];
                 
-                // Om vi hämtat första varan, letar vi bara efter nästa. 
-                // Ev avklippta vägar pga tidigare hinder ligger kvar och roboten åker runt det!
                 planera_nasta_vara();
                 planera_hem_fran_pickup();
 
@@ -681,7 +695,6 @@ int main() {
         update_sensors(&sys, &line_var_f, &line_var_b, &angle, &gyro1, &gyro2, &ir, &flags, &flags_korsning, &flags_ny_korsning);
         process_network_packets(&sys, line_var_f, line_var_b, gyro1, gyro2);
         
-        // Passar in flags som sista parameter här!
         process_autonomous_state(&sys, line_var_f, line_var_b, gyro1, gyro2, flags_korsning, &flags_ny_korsning, flags);
         
         send_telemetry_and_routes(&sys, ir, gyro1, gyro2, flags);
