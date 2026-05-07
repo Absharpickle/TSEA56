@@ -169,7 +169,6 @@ void init_system(SystemPointers *sys) {
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
     
-    // Utskrifterna i uppstarten är kvar för diagnostik
     printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
     // --- I2C: Motorstyrning (0x12) ---
@@ -228,7 +227,7 @@ void init_system(SystemPointers *sys) {
     printf("Listening for UDP on port %d...\n\n", UDP_PORT);
 }
 
-void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b, uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2, uint8_t *flags, uint8_t *flags_korsning, uint8_t *flags_ny_korsning) {
+void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b, uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2, uint8_t *ir_distance, uint8_t *flags, uint8_t *flags_korsning, uint8_t *flags_ny_korsning) {
     unsigned char sensor_raw[PACKET_SIZE];
     if (!sim_sensor && sys->i2c_sens_fd >= 0 && read(sys->i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
         
@@ -245,6 +244,7 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
         *angle      = sd.angle;
         *gyro1      = sd.gyro1;
         *gyro2      = sd.gyro2;
+        *ir_distance = sd.ir;
 
         *flags_korsning = (*flags & 0x0C) >> 2;
         
@@ -580,17 +580,17 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     }
 }
 
-void send_telemetry_and_routes(SystemPointers *sys, uint8_t line_var_f, uint8_t gyro1, uint8_t gyro2, uint8_t flags) {
+void send_telemetry_and_routes(SystemPointers *sys, uint8_t line_var_f, uint8_t gyro1, uint8_t gyro2, uint8_t flags, uint8_t ir_distance) {
     if (gui_known) {
         telemetry_counter++;
         if (telemetry_counter >= 50) {
-            unsigned char tpkt[PACKET_SIZE + 6];
+            unsigned char tpkt[PACKET_SIZE + 7];
             build_telemetry_packet(tpkt,
                 (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
                 line_var_f, gyro1, gyro2, flags, current_node,
                 (uint8_t)current_item_index, (uint8_t)item_count,
-                current_dir, action_done);
-            sendto(sys->sockfd, tpkt, (PACKET_SIZE + 6), 0, (struct sockaddr *)&sys->cliaddr, sizeof(sys->cliaddr));
+                current_dir, action_done, ir_distance);
+            sendto(sys->sockfd, tpkt, (PACKET_SIZE + 7), 0, (struct sockaddr *)&sys->cliaddr, sizeof(sys->cliaddr));
             telemetry_counter = 0;
         }
     }
@@ -609,7 +609,7 @@ void send_telemetry_and_routes(SystemPointers *sys, uint8_t line_var_f, uint8_t 
 // =================================================================
 int main() {
     SystemPointers sys;
-    uint8_t line_var_f = 0, line_var_b = 0, angle = 0, gyro1 = 0, gyro2 = 0;
+    uint8_t line_var_f = 0, line_var_b = 0, angle = 0, gyro1 = 0, gyro2 = 0, ir_distance = 0;
     uint8_t flags = 0, flags_korsning = 0, flags_ny_korsning = 0;
 
     init_system(&sys);
@@ -622,10 +622,10 @@ int main() {
     // NON-BLOCKING MAIN LOOP (~500 Hz)
     // =============================================================
     while (1) {
-        update_sensors(&sys, &line_var_f, &line_var_b, &angle, &gyro1, &gyro2, &flags, &flags_korsning, &flags_ny_korsning);
+        update_sensors(&sys, &line_var_f, &line_var_b, &angle, &gyro1, &gyro2, &ir_distance, &flags, &flags_korsning, &flags_ny_korsning);
         process_network_packets(&sys, line_var_f, line_var_b, gyro1, gyro2);
         process_autonomous_state(&sys, line_var_f, line_var_b, gyro1, gyro2, flags_korsning, &flags_ny_korsning);
-        send_telemetry_and_routes(&sys, line_var_f, gyro1, gyro2, flags);
+        send_telemetry_and_routes(&sys, line_var_f, gyro1, gyro2, flags, ir_distance);
         
         usleep(25000); 
     }
