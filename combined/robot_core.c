@@ -62,6 +62,10 @@ uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
 
+// Externa prototyper för säkerhet
+extern void planera_till_vara(int start, char start_dir);
+extern void planera_hem_fran_pickup();
+
 // --- SYSTEM POINTERS STRUCT ---
 typedef struct {
     int sockfd;
@@ -171,7 +175,6 @@ void init_system(SystemPointers *sys) {
     
     printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
-    // --- I2C: Motorstyrning (0x12) ---
     sys->i2c_styr_fd = open(I2C_DEVICE, O_RDWR); 
     if (sys->i2c_styr_fd >= 0) { 
         ioctl(sys->i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); 
@@ -186,7 +189,6 @@ void init_system(SystemPointers *sys) {
         printf("[SIM] Could not open I2C for Motor Controller. Motor writes disabled.\n");
     }
 
-    // --- I2C: Sensorkort (0x10) ---
     sys->i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
     if (sys->i2c_sens_fd >= 0) {
         ioctl(sys->i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
@@ -201,7 +203,6 @@ void init_system(SystemPointers *sys) {
         printf("[SIM] Could not open I2C for Sensor Board. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
     }
 
-    // --- UDP Socket ---
     if ((sys->sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { 
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -227,7 +228,6 @@ void init_system(SystemPointers *sys) {
     printf("Listening for UDP on port %d...\n\n", UDP_PORT);
 }
 
-// NYTT HÄR: uint8_t *ir inlagt som parameter
 void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b, uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2, uint8_t *ir, uint8_t *flags, uint8_t *flags_korsning, uint8_t *flags_ny_korsning) {
     unsigned char sensor_raw[PACKET_SIZE];
     if (!sim_sensor && sys->i2c_sens_fd >= 0 && read(sys->i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
@@ -245,7 +245,7 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
         *angle      = sd.angle;
         *gyro1      = sd.gyro1;
         *gyro2      = sd.gyro2;
-        *ir         = sd.ir; // <-- Plockar ut ir från buf[5] via sd.ir
+        *ir         = sd.ir; 
 
         *flags_korsning = (*flags & 0x0C) >> 2;
         
@@ -266,15 +266,14 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
         gui_known = true;
     }
 
-    // --- 0x05 Command Packet ---
     CommandPacket cmd = parse_command_packet(buffer, n);
     if (cmd.valid) {
         if (cmd.state == 0x00 || cmd.state == 0x01) {
             if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
+                init_karta(); // ÅTERSTÄLLER KARTAN INFÖR NY KÖRNING!
                 start_autonomous_sequence(cmd.state);
             } else {
                 unsigned char fwd[PACKET_SIZE];
-                // Motorn behöver fortfarande riktiga line_var_f, vilket den får!
                 build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
                 fwd[2] = cmd.target; 
                 if (!sim_motor) write(sys->i2c_styr_fd, fwd, PACKET_SIZE);
@@ -290,6 +289,9 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
                 korsning_aktiv       = 0;
                 aktivt_beslut        = 's';
                 nasta_beslut         = 's';
+                
+                init_karta(); // ÅTERSTÄLLER KARTAN VID MANUELLT AVBROTT!
+                route_changed = true;
             }
             unsigned char fwd[PACKET_SIZE];
             build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
@@ -299,7 +301,6 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
         }
     }
 
-    // --- 0x07 Item List Packet ---
     ItemListPacket items = parse_item_list_packet(buffer, n);
     if (items.valid && items.count > 0) {
         item_count = items.count;
@@ -309,9 +310,59 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
     }
 }
 
-void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2, uint8_t flags_korsning, uint8_t *flags_ny_korsning) {
+// NYTT: flags ligger tillagt som sista parameter här
+void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2, uint8_t flags_korsning, uint8_t *flags_ny_korsning, uint8_t flags) {
     if (current_phase == PHASE_IDLE) return;
     
+    // =================================================================
+    // DYNAMISK HINDERUNDANVIKNING
+    // =================================================================
+    static uint8_t last_hinder = 0;
+    uint8_t hinder_upptackt = (flags & 0x10) >> 4;
+    
+    // Vi kollar bara hinder när vi faktiskt kör mellan noder (inte roterar/plockar/droppar)
+    if (hinder_upptackt == 1 && last_hinder == 0 && 
+        (current_phase == PHASE_TO_ITEM || current_phase == PHASE_TO_HOME) &&
+        !is_rotating && !is_picking_up && !is_dropping) {
+        
+        int *current_route = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
+        int target_node = current_route[current_action_index + 1]; // Noden vi just nu åker mot
+        
+        if (target_node != STOP && target_node >= 0 && target_node <= 24) {
+            int blocked_node = -1;
+            
+            // Kolla vilken nod som kommer efter target_node i vår nuvarande riktning
+            if (current_dir == 'n') blocked_node = target_node - 5;
+            else if (current_dir == 's') blocked_node = target_node + 5;
+            else if (current_dir == 'e') blocked_node = target_node + 1;
+            else if (current_dir == 'w') blocked_node = target_node - 1;
+            
+            // Om blockerad nod är rimlig inuti grafen, klipp bort vägen!
+            if (blocked_node >= 0 && blocked_node <= 24) {
+                printf("\n[!] HINDER UPPTÄCKT! Klipper kanten %d <-> %d\n", target_node, blocked_node);
+                vag[target_node][blocked_node] = 0;
+                vag[blocked_node][target_node] = 0;
+                
+                // Beräkna om rutten. Vi byter ut arrayen men vi startar OMKALKYLERINGEN
+                // från `target_node`, med kompassen `current_dir`.
+                if (current_phase == PHASE_TO_ITEM) {
+                    planera_till_vara(target_node, current_dir);
+                } else if (current_phase == PHASE_TO_HOME) {
+                    hitta_rutt(target_node, START, rutt_hem, current_dir);
+                    bygg_beslut(rutt_hem, current_dir, beslut_hem);
+                }
+                
+                // Geni-drag: Genom att sätta detta till -1, kommer den understa 
+                // koden för 'intersection_triggered' att plussa den till 0 sekunden vi rullar in i 
+                // target_node, vilket gör att den laddar beslut 0 av den splitternya rutten!
+                current_action_index = -1;
+                route_changed = true;
+            }
+        }
+    }
+    last_hinder = hinder_upptackt;
+    // =================================================================
+
     long long elapsed_in_state = current_time_ms() - action_timer_start;
 
     if (is_rotating) {
@@ -409,6 +460,9 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             if (current_item_index < item_count) {
                 vara_u = item_list_u[current_item_index];
                 vara_v = item_list_v[current_item_index];
+                
+                // Om vi hämtat första varan, letar vi bara efter nästa. 
+                // Ev avklippta vägar pga tidigare hinder ligger kvar och roboten åker runt det!
                 planera_nasta_vara();
                 planera_hem_fran_pickup();
 
@@ -445,7 +499,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             }
         }
     }
-    // --- DROP STATE MACHINE ---
     else if (is_dropping) {
         if (sim_motor) {
             drop_step_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1500) ||
@@ -582,15 +635,14 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     }
 }
 
-// NYTT HÄR: Vi tar in `ir_to_gui` och puttar in det där line_var_f satt förut
 void send_telemetry_and_routes(SystemPointers *sys, uint8_t ir_to_gui, uint8_t gyro1, uint8_t gyro2, uint8_t flags) {
     if (gui_known) {
         telemetry_counter++;
         if (telemetry_counter >= 50) {
-            unsigned char tpkt[PACKET_SIZE + 6]; // Stannar på 14 bytes!
+            unsigned char tpkt[PACKET_SIZE + 6]; 
             build_telemetry_packet(tpkt,
                 (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
-                ir_to_gui, gyro1, gyro2, flags, current_node, // <-- ir_to_gui går in som parameter 5 ("line_var_f")
+                ir_to_gui, gyro1, gyro2, flags, current_node, 
                 (uint8_t)current_item_index, (uint8_t)item_count,
                 current_dir, action_done);
             sendto(sys->sockfd, tpkt, (PACKET_SIZE + 6), 0, (struct sockaddr *)&sys->cliaddr, sizeof(sys->cliaddr));
@@ -613,7 +665,7 @@ void send_telemetry_and_routes(SystemPointers *sys, uint8_t ir_to_gui, uint8_t g
 int main() {
     SystemPointers sys;
     uint8_t line_var_f = 0, line_var_b = 0, angle = 0, gyro1 = 0, gyro2 = 0;
-    uint8_t ir = 0; // <-- NYTT: Variabel för IR
+    uint8_t ir = 0; 
     uint8_t flags = 0, flags_korsning = 0, flags_ny_korsning = 0;
 
     init_system(&sys);
@@ -626,12 +678,12 @@ int main() {
     // NON-BLOCKING MAIN LOOP (~500 Hz)
     // =============================================================
     while (1) {
-        // Skickar med referens till ir
         update_sensors(&sys, &line_var_f, &line_var_b, &angle, &gyro1, &gyro2, &ir, &flags, &flags_korsning, &flags_ny_korsning);
         process_network_packets(&sys, line_var_f, line_var_b, gyro1, gyro2);
-        process_autonomous_state(&sys, line_var_f, line_var_b, gyro1, gyro2, flags_korsning, &flags_ny_korsning);
         
-        // Skickar in 'ir' istället för 'line_var_f' till GUI:t
+        // Passar in flags som sista parameter här!
+        process_autonomous_state(&sys, line_var_f, line_var_b, gyro1, gyro2, flags_korsning, &flags_ny_korsning, flags);
+        
         send_telemetry_and_routes(&sys, ir, gyro1, gyro2, flags);
         
         usleep(25000); 
