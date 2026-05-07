@@ -53,8 +53,8 @@ class MainWindow(QMainWindow):
         self.top_hlayout.addLayout(right_vlayout)
 
         # --- NETWORKING ---
-        self.pi_ip = IP_ADDRESS_HOME # Testing at home
-        #self.pi_ip = IP_ADDRESS_SITE # Testing at site
+        #self.pi_ip = IP_ADDRESS_HOME # Testing at home
+        self.pi_ip = IP_ADDRESS_SITE # Testing at site
         self.pi_port = 5001
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.control_sock.bind(("0.0.0.0", 0))
@@ -363,7 +363,7 @@ class MainWindow(QMainWindow):
         elif key == Qt.Key.Key_4: self.state_combo.setCurrentIndex(3); return
 
         # Target hotkeys
-        elif key == Qt.Key.Key_W: self.target_combo.setCurrentIndex(0); return
+        elif key == Qt.Key.Key_T: self.target_combo.setCurrentIndex(0); return
         elif key == Qt.Key.Key_A: self.target_combo.setCurrentIndex(1); return
 
         # Action keys
@@ -379,7 +379,7 @@ class MainWindow(QMainWindow):
             }
             action_char = key_map.get(key)
         elif target == "arm":
-            key_map = {Qt.Key.Key_V: 'v', Qt.Key.Key_H: 'h'}
+            key_map = {Qt.Key.Key_V: 'v', Qt.Key.Key_H: 'h', Qt.Key.Key_W: 'w'}
             action_char = key_map.get(key)
 
         if action_char:

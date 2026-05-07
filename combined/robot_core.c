@@ -34,9 +34,9 @@ unsigned char current_auto_state = 1;
 bool log_next_action         = false;
 
 bool is_rotating   = false;
-char pending_rotation_cmd = ' '; // Sparar rot-riktning medan den stannar
+char pending_rotation_cmd = ' '; 
 bool is_picking_up = false;
-char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'h' (höger)
+char pickup_cmd    = 'v'; 
 bool is_dropping   = false;
 bool drop_step_done = false;
 long long action_timer_start = 0;
@@ -50,7 +50,7 @@ long long sim_segment_timer = 0;
 // --- TELEMETRY GLOBALS ---
 bool gui_known        = false;
 int telemetry_counter = 0;
-bool route_changed    = false; // Flagga: ny rutt ska skickas till GUI
+bool route_changed    = false; 
 
 // --- LIVE STATE ---
 char nasta_beslut  = 's';
@@ -81,7 +81,7 @@ long long current_time_ms() {
 }
 
 // =================================================================
-// LOGGNING FÖR STYRMODUL (med datum/tid)
+// LOGGNING FÖR STYRMODUL (till fil)
 // =================================================================
 void log_styr_response(const unsigned char *received) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
@@ -126,7 +126,6 @@ void aktivt_beslut_fn(int index) {
 
 void start_autonomous_sequence(unsigned char state) {
     if (item_count <= 0) {
-        printf("[!] No items configured. Send item list (0x07) first.\n");
         return;
     }
 
@@ -134,8 +133,6 @@ void start_autonomous_sequence(unsigned char state) {
     vara_u = item_list_u[0];
     vara_v = item_list_v[0];
     
-    printf("\n=== AUTONOMOUS ROUTE: %d item(s) to collect ===\n", item_count);
-    printf("-> Item 1/%d: edge %d <-> %d\n", item_count, vara_u, vara_v);
     planera_till_vara(START, 's');
     planera_hem_fran_pickup();
     
@@ -151,17 +148,15 @@ void start_autonomous_sequence(unsigned char state) {
 
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
         is_rotating = true;
-        pending_rotation_cmd = aktivt_beslut; // Spara svängen
-        aktivt_beslut = 's';                  // Skicka stop först (från stillastående)
+        pending_rotation_cmd = aktivt_beslut; 
+        aktivt_beslut = 's';                  
         action_timer_start = current_time_ms();
     } else if (sim_sensor) {
         sim_segment_timer = current_time_ms();
     }
 
     log_next_action = true;
-    route_changed  = true; // Skicka rutten till GUI
-    printf("-> Route Calculated. Driving to item 1/%d...\n", item_count);
-    if (sim_sensor) printf("[SIM] Intersections will be triggered every %d ms\n", SIM_SEGMENT_MS);
+    route_changed  = true; 
 }
 
 // =================================================================
@@ -173,7 +168,6 @@ void init_system(SystemPointers *sys) {
 
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
-    printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
     // --- I2C: Motorstyrning (0x12) ---
     sys->i2c_styr_fd = open(I2C_DEVICE, O_RDWR); 
@@ -181,13 +175,9 @@ void init_system(SystemPointers *sys) {
         ioctl(sys->i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); 
         if (write(sys->i2c_styr_fd, NULL, 0) < 0) { 
             sim_motor = true;
-            printf("[SIM] Motor Controller (0x12) missing. Motor writes disabled.\n"); 
-        } else {
-            printf("Connected to Motor Controller (0x12)\n"); 
-        }
+        } 
     } else {
         sim_motor = true;
-        printf("[SIM] Could not open I2C for Motor Controller. Motor writes disabled.\n");
     }
 
     // --- I2C: Sensorkort (0x10) ---
@@ -196,13 +186,9 @@ void init_system(SystemPointers *sys) {
         ioctl(sys->i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
         if (write(sys->i2c_sens_fd, NULL, 0) < 0) {
             sim_sensor = true;
-            printf("[SIM] Sensor Board (0x10) missing. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
-        } else {
-            printf("Connected to Sensor Board (0x10)\n");
-        }
+        } 
     } else {
         sim_sensor = true;
-        printf("[SIM] Could not open I2C for Sensor Board. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
     }
 
     // --- UDP Socket ---
@@ -226,9 +212,7 @@ void init_system(SystemPointers *sys) {
     }
     
     sys->cliaddr_len = sizeof(sys->cliaddr);
-    memset(&sys->cliaddr, 0, sizeof(sys->cliaddr)); // Zero it out initially
-
-    printf("Listening for UDP on port %d...\n\n", UDP_PORT);
+    memset(&sys->cliaddr, 0, sizeof(sys->cliaddr));
 }
 
 void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b, uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2, uint8_t *flags, uint8_t *flags_korsning, uint8_t *flags_ny_korsning) {
@@ -242,7 +226,7 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
         }
         
         SensorData sd = parse_sensor_packet(sensor_raw);
-        *flags      = sd.flags;
+        *flags      = sd.flags;       
         *line_var_f = sd.line_var_f;
         *line_var_b = sd.line_var_b;
         *angle      = sd.angle;
@@ -277,14 +261,12 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
             } else {
                 unsigned char fwd[PACKET_SIZE];
                 build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
-                fwd[2] = cmd.target; // Behåll target-byte från GUI
+                fwd[2] = cmd.target; 
                 if (!sim_motor) write(sys->i2c_styr_fd, fwd, PACKET_SIZE);
                 log_verification(fwd, cmd.action);
-                printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
             }
         } else if (cmd.state == 0x02 || cmd.state == 0x03) {
             if (current_phase != PHASE_IDLE) {
-                printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
                 current_phase        = PHASE_IDLE;
                 is_rotating          = false;
                 is_picking_up        = false;
@@ -299,7 +281,6 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
             fwd[2] = cmd.target;
             if (!sim_motor) write(sys->i2c_styr_fd, fwd, PACKET_SIZE);
             log_verification(fwd, cmd.action);
-            printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
         }
     }
 
@@ -310,7 +291,6 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
         memcpy(item_list_u, items.items_u, items.count * sizeof(uint8_t));
         memcpy(item_list_v, items.items_v, items.count * sizeof(uint8_t));
         current_item_index = 0;
-        printf("[ITEMS] Received %d valid item(s) from GUI\n", item_count);
     }
 }
 
@@ -414,7 +394,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             if (current_item_index < item_count) {
                 vara_u = item_list_u[current_item_index];
                 vara_v = item_list_v[current_item_index];
-                printf("\n-> Item %d/%d: edge %d <-> %d\n", current_item_index + 1, item_count, vara_u, vara_v);
                 planera_nasta_vara();
                 planera_hem_fran_pickup();
 
@@ -430,7 +409,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                 } else if (sim_sensor) {
                     sim_segment_timer = current_time_ms();
                 }
-                printf("-> PHASE CHANGE: Driving to item %d/%d...\n", current_item_index + 1, item_count);
                 log_next_action = true;
                 route_changed   = true;
             } else {
@@ -447,7 +425,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                 } else if (sim_sensor) {
                     sim_segment_timer = current_time_ms();
                 }
-                printf("\n-> PHASE CHANGE: All %d items collected. Heading Home...\n", item_count);
                 log_next_action = true;
                 route_changed   = true;
             }
@@ -487,7 +464,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             current_node  = START;
             aktivt_beslut = 's';
             nasta_beslut  = 's';
-            printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
 
             unsigned char stop_pkt[PACKET_SIZE];
             build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
@@ -547,7 +523,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                     aktivt_beslut = 'x'; 
                     nasta_beslut  = pickup_cmd;
                     is_picking_up = true;
-                    printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
                     log_next_action = true;
                 }
                 else if (current_phase == PHASE_TO_HOME) {
@@ -556,7 +531,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                     nasta_beslut = 'w';
                     is_dropping = true;
                     action_timer_start = current_time_ms();
-                    printf("\n-> Dropping basket at home...\n");
                     log_next_action = true;
                 }
             }
@@ -581,8 +555,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         if (!sim_motor) write(sys->i2c_styr_fd, auto_packet, PACKET_SIZE);
         
         if (log_next_action) {
-            printf("Action updated to: '%c' (Sending to motors: '%c', Index: %d, Next: '%c')\n",
-                   aktivt_beslut, auto_packet[3], current_action_index, nasta_beslut);
             log_next_action = false;
         }
 
@@ -629,10 +601,6 @@ int main() {
 
     init_system(&sys);
 
-    if (sim_sensor || sim_motor) {
-        printf("\n*** RUNNING IN SIM MODE ***\n\n");
-    }
-
     // =============================================================
     // NON-BLOCKING MAIN LOOP (~500 Hz)
     // =============================================================
@@ -642,7 +610,6 @@ int main() {
         process_autonomous_state(&sys, line_var_f, line_var_b, gyro1, gyro2, flags_korsning, &flags_ny_korsning);
         send_telemetry_and_routes(&sys, line_var_f, gyro1, gyro2, flags);
         
-        // TINY DELAY (2ms för 500Hz loop)
         usleep(25000); 
     }
 
