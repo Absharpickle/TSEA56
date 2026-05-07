@@ -168,6 +168,9 @@ void init_system(SystemPointers *sys) {
 
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
+    
+    // Utskrifterna i uppstarten är kvar för diagnostik
+    printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
     // --- I2C: Motorstyrning (0x12) ---
     sys->i2c_styr_fd = open(I2C_DEVICE, O_RDWR); 
@@ -175,9 +178,13 @@ void init_system(SystemPointers *sys) {
         ioctl(sys->i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); 
         if (write(sys->i2c_styr_fd, NULL, 0) < 0) { 
             sim_motor = true;
-        } 
+            printf("[SIM] Motor Controller (0x12) missing. Motor writes disabled.\n"); 
+        } else {
+            printf("Connected to Motor Controller (0x12)\n"); 
+        }
     } else {
         sim_motor = true;
+        printf("[SIM] Could not open I2C for Motor Controller. Motor writes disabled.\n");
     }
 
     // --- I2C: Sensorkort (0x10) ---
@@ -186,9 +193,13 @@ void init_system(SystemPointers *sys) {
         ioctl(sys->i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
         if (write(sys->i2c_sens_fd, NULL, 0) < 0) {
             sim_sensor = true;
-        } 
+            printf("[SIM] Sensor Board (0x10) missing. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
+        } else {
+            printf("Connected to Sensor Board (0x10)\n");
+        }
     } else {
         sim_sensor = true;
+        printf("[SIM] Could not open I2C for Sensor Board. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
     }
 
     // --- UDP Socket ---
@@ -213,6 +224,8 @@ void init_system(SystemPointers *sys) {
     
     sys->cliaddr_len = sizeof(sys->cliaddr);
     memset(&sys->cliaddr, 0, sizeof(sys->cliaddr));
+    
+    printf("Listening for UDP on port %d...\n\n", UDP_PORT);
 }
 
 void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b, uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2, uint8_t *flags, uint8_t *flags_korsning, uint8_t *flags_ny_korsning) {
@@ -600,6 +613,10 @@ int main() {
     uint8_t flags = 0, flags_korsning = 0, flags_ny_korsning = 0;
 
     init_system(&sys);
+
+    if (sim_sensor || sim_motor) {
+        printf("\n*** RUNNING IN SIM MODE ***\n\n");
+    }
 
     // =============================================================
     // NON-BLOCKING MAIN LOOP (~500 Hz)
