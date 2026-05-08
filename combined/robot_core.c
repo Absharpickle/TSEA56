@@ -242,13 +242,15 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
 
         *flags_korsning = (*flags & 0x0C) >> 2;
         
+        // Bit 5 (0x20) är "NY händelse" enligt sensorkoden. Vi skiftar 5 steg för att få ut 1 eller 0.
         if (!(*flags_ny_korsning)) {
-            *flags_ny_korsning = (*flags & 0x20) >> 4; // Notera: Du kan behöva ändra detta om sensorn skickar bit 5 för ny korsning istället.
+            *flags_ny_korsning = (*flags & 0x20) >> 5; 
         }
         
-        // UPPDATERING: Bit 5 är 0x20. Hindersensor triggad
-        *obstacle_detected = (*flags & 0x20) != 0;
+        // Bit 4 (0x10) är "hinder detekterat" enligt sensorkoden.
+        *obstacle_detected = (*flags & 0x10) != 0;
 
+        // (Behåller din befintliga logik för upphämtning)
         if (*flags_korsning == 1)      pickup_cmd = 'v';
         else if (*flags_korsning == 3) pickup_cmd = 'h';
     }
