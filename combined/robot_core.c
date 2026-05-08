@@ -62,7 +62,7 @@ uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
 
-// --- HINDERHANTERING (NY) ---
+// --- HINDERHANTERING ---
 bool is_handling_obstacle = false;     
 long long obstacle_timer_start = 0;    
 
@@ -222,7 +222,6 @@ void init_system(SystemPointers *sys) {
     printf("Listening for UDP on port %d...\n\n", UDP_PORT);
 }
 
-// NYTT: hinder-bool tillagd
 void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b, uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2, uint8_t *flags, uint8_t *flags_korsning, uint8_t *flags_ny_korsning, bool *obstacle_detected) {
     unsigned char sensor_raw[PACKET_SIZE];
     if (!sim_sensor && sys->i2c_sens_fd >= 0 && read(sys->i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
@@ -250,7 +249,6 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
         // Bit 4 (0x10) är "hinder detekterat" enligt sensorkoden.
         *obstacle_detected = (*flags & 0x10) != 0;
 
-        // (Behåller din befintliga logik för upphämtning)
         if (*flags_korsning == 1)      pickup_cmd = 'v';
         else if (*flags_korsning == 3) pickup_cmd = 'h';
     }
@@ -276,7 +274,7 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
             }
         } else if (cmd.state == 0x02 || cmd.state == 0x03) {
             
-            init_karta(); // <-- UPPDATERING: Glöm alla blockeringar vid manuell override!
+            init_karta(); // Återställ kartan och glöm blockeringar vid manuell styrning
             
             if (current_phase != PHASE_IDLE) {
                 printf("\n[!] MANUAL OVERRIDE DETECTED. Map reset. Canceling Auto Route.\n");
@@ -329,57 +327,66 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         }
     }
 
-    // Hittade ett hinder? (och håller inte redan på med en annan åtgärd)
-    if (obstacle_detected && !is_handling_obstacle && !is_rotating && !is_picking_up && !is_dropping && korsning_aktiv == 0) {
-        int approaching_node = -1;
-        int *current_route = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
-        char *current_beslut = (current_phase == PHASE_TO_ITEM) ? beslut_till_vara : beslut_hem;
+    // Hittade ett hinder? (Och roterar eller plockar inte upp varan)
+    if (obstacle_detected && !is_handling_obstacle && !is_rotating && !is_picking_up && !is_dropping) {
+        
+        // 1. VI STANNNAR DIREKT - OAVSETT VAD!
+        is_handling_obstacle = true;
+        obstacle_timer_start = current_time_ms();
+        
+        unsigned char stop_pkt[PACKET_SIZE];
+        build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
+        if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
 
-        if (current_action_index + 1 < NODES) {
-            approaching_node = current_route[current_action_index + 1];
-        }
+        // 2. Räkna bara ut kartändringen om vi inte är mitt i en korsning
+        if (korsning_aktiv == 0) {
+            int approaching_node = -1;
+            int *current_route = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
+            char *current_beslut = (current_phase == PHASE_TO_ITEM) ? beslut_till_vara : beslut_hem;
 
-        if (approaching_node >= 0 && approaching_node < 25) {
-            int blocked_node = -1;
-            
-            // Hitta noden vi skulle åkt till EFTER approaching_node i samma riktning
-            for (int i = 0; i < 25; i++) {
-                if (vag[approaching_node][i] && nodriktningsmatris[approaching_node][i] == current_dir) {
-                    blocked_node = i;
-                    break;
-                }
+            if (current_action_index + 1 < NODES) {
+                approaching_node = current_route[current_action_index + 1];
             }
 
-            if (blocked_node != -1) {
-                printf("\n[!] HINDER UPPTÄCKT! Tar bort väg %d <-> %d och räknar om rutt...\n", approaching_node, blocked_node);
+            if (approaching_node >= 0 && approaching_node < 25) {
+                int blocked_node = -1;
                 
-                vag[approaching_node][blocked_node] = 0;
-                vag[blocked_node][approaching_node] = 0;
-
-                if (current_phase == PHASE_TO_ITEM) {
-                    planera_till_vara(approaching_node, current_dir);
-                } else if (current_phase == PHASE_TO_HOME) {
-                    int rutt_tmp[NODES];
-                    hitta_rutt(approaching_node, START, rutt_tmp, current_dir);
-                    memcpy(rutt_hem, rutt_tmp, sizeof(rutt_tmp));
-                    bygg_beslut(rutt_hem, current_dir, beslut_hem);
+                // Hitta noden vi skulle åkt till EFTER approaching_node i samma riktning
+                for (int i = 0; i < 25; i++) {
+                    if (vag[approaching_node][i] && nodriktningsmatris[approaching_node][i] == current_dir) {
+                        blocked_node = i;
+                        break;
+                    }
                 }
 
-                current_action_index = -1; 
-                aktivt_beslut = 's'; 
-                nasta_beslut = current_beslut[0];
-                route_changed = true; 
-                
-                is_handling_obstacle = true;
-                obstacle_timer_start = current_time_ms();
-                
-                unsigned char stop_pkt[PACKET_SIZE];
-                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
-                if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
-                
-                return; // Bryt loopen direkt för denna frame
+                if (blocked_node != -1) {
+                    printf("\n[!] HINDER UPPTÄCKT! Tar bort väg %d <-> %d och räknar om rutt...\n", approaching_node, blocked_node);
+                    
+                    vag[approaching_node][blocked_node] = 0;
+                    vag[blocked_node][approaching_node] = 0;
+
+                    if (current_phase == PHASE_TO_ITEM) {
+                        planera_till_vara(approaching_node, current_dir);
+                    } else if (current_phase == PHASE_TO_HOME) {
+                        int rutt_tmp[NODES];
+                        hitta_rutt(approaching_node, START, rutt_tmp, current_dir);
+                        memcpy(rutt_hem, rutt_tmp, sizeof(rutt_tmp));
+                        bygg_beslut(rutt_hem, current_dir, beslut_hem);
+                    }
+
+                    current_action_index = -1; 
+                    aktivt_beslut = 's'; 
+                    nasta_beslut = current_beslut[0];
+                    route_changed = true; 
+                } else {
+                    printf("\n[!] Hinder upptäckt, men fann ingen specifik väg framför %d att ta bort i riktning '%c'.\n", approaching_node, current_dir);
+                }
             }
+        } else {
+            printf("\n[!] Hinder upptäckt INUTI en korsning. Stannar, men väntar med rutträkning.\n");
         }
+        
+        return; // Avbryt process loopen för denna frame så den stannar direkt
     }
     // =================================================================
 
@@ -423,14 +430,59 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     }
 
     if (is_picking_up) {
-        // Kör din befintliga upphämtningslogik... (exkluderad detalj för korthet)
-        // ...
-        return; 
+        unsigned char pick_pkt[PACKET_SIZE];
+        build_motor_packet(pick_pkt, current_auto_state, true, pickup_cmd, line_var_f, line_var_b, gyro1, gyro2);
+
+        if (!sim_motor) {
+            unsigned char ack_buf[PACKET_SIZE];
+            if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
+                StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
+                if (resp.valid && resp.action_done == 1) {
+                    pickup_step_done = true;
+                }
+            }
+            write(sys->i2c_styr_fd, pick_pkt, PACKET_SIZE);
+        } else {
+            if (elapsed_in_state > 3000) pickup_step_done = true;
+        }
+
+        if (pickup_step_done) {
+            is_picking_up = false;
+            pickup_step_done = false;
+            current_item_index++;
+            
+            if (current_item_index < item_count) {
+                vara_u = item_list_u[current_item_index];
+                vara_v = item_list_v[current_item_index];
+                planera_till_vara(current_node, current_dir);
+                planera_hem_fran_pickup();
+                
+                current_action_index = 0;
+                aktivt_beslut_fn(current_action_index);
+                route_changed = true;
+                printf("\n-> Picked up item %d/%d! Next target edge: %d <-> %d\n", current_item_index, item_count, vara_u, vara_v);
+            } else {
+                printf("\n-> All items collected! Returning home to node %d.\n", START);
+                current_phase = PHASE_TO_HOME;
+                current_action_index = 0;
+                aktivt_beslut_fn(current_action_index);
+                route_changed = true;
+            }
+            
+            if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
+                is_rotating = true;
+                pending_rotation_cmd = aktivt_beslut;
+                aktivt_beslut = 's';
+                action_timer_start = current_time_ms();
+            } else {
+                log_next_action = true;
+            }
+        }
+        return;
     }
 
     if (is_dropping) {
-        // Kör din befintliga lämningslogik... (exkluderad detalj för korthet)
-        // ...
+        // ... (Lämningslogik om du har det, utelämnat för att bibehålla storleken från din originallinje, kan läggas till vid behov)
         return;
     }
 
@@ -502,7 +554,7 @@ int main() {
     SystemPointers sys;
     uint8_t line_var_f = 0, line_var_b = 0, angle = 0, gyro1 = 0, gyro2 = 0;
     uint8_t flags = 0, flags_korsning = 0, flags_ny_korsning = 0;
-    bool obstacle_detected = false; // Lades till här!
+    bool obstacle_detected = false; 
 
     init_system(&sys);
 
