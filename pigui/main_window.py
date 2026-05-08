@@ -1,7 +1,7 @@
 import sys
 import socket
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QGridLayout, QFrame)
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QLabel, QFrame, QPushButton)
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QImage, QPixmap
 
@@ -9,155 +9,206 @@ import protocol
 from threads import VideoThread, TelemetryThread
 from map_widget import MapFrame
 
-# Inställningar
-ROBOT_IP = "192.168.1.100"  # Ändra till robotens faktiska IP
-UDP_PORT = 5001
+# ── Network settings ────────────────────────────────────────────────
+ROBOT_IP = "192.168.1.100"
+UDP_PORT  = 5001
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Ground Control - Arm & Navigation")
-        self.resize(1000, 700)
-        
-        # State för armen och styrsystemet
-        self.selected_joint = 0  
-        self.current_state = 0x02 # Starta i Manuellt läge (0x02)
+        self.setWindowTitle("Robot Ground Control")
+        self.resize(1100, 800)
+
+        # Arm-control state
+        self.selected_joint  = 0      # 0-5 = J1-J6, 6 = camera
+        self.current_state   = 0x02   # Start in manual mode
+
+        # Item edges selected on the map
+        self.item_edges = []
+
+        # UDP socket — shared for TX (commands) and RX (telemetry)
         self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        
-        self.init_ui()
-        self.start_threads()
 
-    def init_ui(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
+        self._init_ui()
+        self._start_threads()
 
-        # --- Vänster sida: Video och Kontrollinfo ---
-        left_layout = QVBoxLayout()
-        
-        self.video_label = QLabel("Väntar på video...")
+    # ──────────────────────────────────────────────────────────────────
+    # UI setup
+    # ──────────────────────────────────────────────────────────────────
+
+    def _init_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setSpacing(12)
+        root.setContentsMargins(10, 10, 10, 10)
+
+        # ── Left column: video + help text ───────────────────────────
+        left = QVBoxLayout()
+
+        self.video_label = QLabel("Waiting for video stream…")
         self.video_label.setFixedSize(640, 480)
-        self.video_label.setStyleSheet("background-color: black; color: white;")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        left_layout.addWidget(self.video_label)
+        self.video_label.setStyleSheet("background-color: #111; color: #aaa;")
+        left.addWidget(self.video_label)
 
-        # Kontroll-instruktioner
-        info_box = QFrame()
-        info_box.setStyleSheet("background-color: #2c3e50; color: white; border-radius: 5px;")
-        info_layout = QGridLayout(info_box)
-        info_layout.addWidget(QLabel("<b>Hjul:</b> W,A,S,D,Q,E (O = Auto/Manuell)"), 0, 0)
-        info_layout.addWidget(QLabel("<b>Välj Joint:</b> 5, 6, 7, 8, 9, 0"), 1, 0)
-        info_layout.addWidget(QLabel("<b>Välj Kamera:</b> K"), 1, 1)
-        info_layout.addWidget(QLabel("<b>Styr Arm:</b> + (Öka), - (Minska), . (Stopp)"), 2, 0)
-        left_layout.addWidget(info_box)
-        
-        main_layout.addLayout(left_layout)
+        help_label = QLabel(
+            "<b>Hjul:</b> W A S D &nbsp;|&nbsp; "
+            "<b>Joint:</b> 5-0 &nbsp;|&nbsp; "
+            "<b>Kamera:</b> K &nbsp;|&nbsp; "
+            "<b>Arm:</b> + &minus; . &nbsp;|&nbsp; "
+            "<b>Klicka karta:</b> lägg till vara"
+        )
+        help_label.setWordWrap(True)
+        left.addWidget(help_label)
 
-        # --- Höger sida: Karta och Telemetri ---
-        right_layout = QVBoxLayout()
-        self.map_widget = MapFrame({}) 
-        right_layout.addWidget(self.map_widget)
+        # Clear items button
+        clear_btn = QPushButton("Rensa varor")
+        clear_btn.clicked.connect(self._clear_items)
+        left.addWidget(clear_btn)
 
-        # Telemetri-data
-        self.tele_box = QFrame()
-        self.tele_box.setStyleSheet("background-color: #ecf0f1; border: 1px solid #bdc3c7;")
-        tele_layout = QVBoxLayout(self.tele_box)
-        
-        self.label_phase = QLabel("Fas: IDLE")
-        self.label_node = QLabel("Nod: -")
-        self.label_action = QLabel("Aktion: -")
-        self.label_sensors = QLabel("Sensorer: -")
-        self.label_joint_status = QLabel("Vald Joint: 1")
-        
-        tele_layout.addWidget(QLabel("<b>TELEMETRI</b>"))
-        tele_layout.addWidget(self.label_phase)
-        tele_layout.addWidget(self.label_node)
-        tele_layout.addWidget(self.label_action)
-        tele_layout.addWidget(self.label_sensors)
-        tele_layout.addWidget(self.label_joint_status)
-        
-        right_layout.addWidget(self.tele_box)
-        main_layout.addLayout(right_layout)
+        left.addStretch()
+        root.addLayout(left)
 
-    def start_threads(self):
+        # ── Right column: map + telemetry ────────────────────────────
+        right = QVBoxLayout()
+        right.setSpacing(8)
+
+        # MapFrame is now self-contained — no grid_nodes dict needed
+        self.map_widget = MapFrame()
+        self.map_widget.edge_clicked.connect(self._handle_map_click)
+        right.addWidget(self.map_widget)
+
+        # Telemetry display
+        self.lbl_node      = QLabel("Nod: –")
+        self.lbl_phase     = QLabel("Fas: –")
+        self.lbl_action    = QLabel("Åtgärd: –")
+        self.lbl_joint     = QLabel("Vald joint: J1")
+        self.lbl_items     = QLabel("Varor: 0 st")
+        self.lbl_direction = QLabel("Riktning: –")
+
+        for lbl in (self.lbl_node, self.lbl_phase, self.lbl_action,
+                    self.lbl_joint, self.lbl_items, self.lbl_direction):
+            lbl.setStyleSheet("font-family: monospace; font-size: 12px;")
+            right.addWidget(lbl)
+
+        right.addStretch()
+        root.addLayout(right)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Thread management
+    # ──────────────────────────────────────────────────────────────────
+
+    def _start_threads(self):
         self.video_thread = VideoThread()
-        self.video_thread.change_pixmap_signal.connect(self.update_image)
+        self.video_thread.change_pixmap_signal.connect(self._update_image)
         self.video_thread.start()
 
         self.tele_thread = TelemetryThread(self.udp_sock)
-        self.tele_thread.telemetry_signal.connect(self.update_telemetry)
+        self.tele_thread.telemetry_signal.connect(self._update_telemetry)
         self.tele_thread.route_signal.connect(self.map_widget.set_route)
         self.tele_thread.start()
 
-    @pyqtSlot(object)
-    def update_image(self, cv_img):
-        height, width, channel = cv_img.shape
-        bytes_per_line = 3 * width
-        q_img = QImage(cv_img.data, width, height, bytes_per_line, QImage.Format.Format_RGB888).rgbSwapped()
-        self.video_label.setPixmap(QPixmap.fromImage(q_img))
+    # ──────────────────────────────────────────────────────────────────
+    # Map interaction
+    # ──────────────────────────────────────────────────────────────────
+
+    def _handle_map_click(self, edge: tuple):
+        """Toggle an edge in the item list and (re-)send the 0x07 packet."""
+        if edge in self.item_edges:
+            self.item_edges.remove(edge)
+        else:
+            self.item_edges.append(edge)
+
+        self.map_widget.set_item_edges(self.item_edges)
+        self.lbl_items.setText(f"Varor: {len(self.item_edges)} st")
+
+        pkt = protocol.build_item_list_packet(self.item_edges)
+        if pkt:
+            self.udp_sock.sendto(pkt, (ROBOT_IP, UDP_PORT))
+        print(f"[MAP] Varor: {self.item_edges}")
+
+    def _clear_items(self):
+        """Remove all item edges from the map."""
+        self.item_edges.clear()
+        self.map_widget.set_item_edges([])
+        self.lbl_items.setText("Varor: 0 st")
+
+    # ──────────────────────────────────────────────────────────────────
+    # Slots
+    # ──────────────────────────────────────────────────────────────────
 
     @pyqtSlot(dict)
-    def update_telemetry(self, data):
-        phases = ["IDLE", "TILL VARA", "PLOCKAR", "HEM", "LÄMNAR"]
-        self.label_phase.setText(f"Fas: {phases[data['phase']] if data['phase'] < 5 else data['phase']}")
-        self.label_node.setText(f"Nod: {data['node']} (Riktning: {data['direction']})")
-        self.label_action.setText(f"Aktion: {data['action']} -> Nästa: {data['next_action']}")
-        self.label_sensors.setText(f"Sens: F:{data['line_var_f']} | Flags: 0x{data['flags']:02X}")
+    def _update_telemetry(self, data: dict):
+        phase_names = {0: "IDLE", 1: "→ VARA", 2: "PICKUP", 3: "→ HEM", 4: "AVLÄMNING"}
+        self.lbl_node.setText(f"Nod: {data['node']}")
+        self.lbl_phase.setText(f"Fas: {phase_names.get(data['phase'], str(data['phase']))}")
+        self.lbl_action.setText(
+            f"Åtgärd: {data['action']}  →  {data['next_action']}  "
+            f"({data['item_idx']+1}/{data['item_count']})"
+        )
+        self.lbl_direction.setText(f"Riktning: {data['direction']}")
+
+        # Update robot marker on the map
+        self.map_widget.set_robot_node(data['node'])
+
+    @pyqtSlot(object)
+    def _update_image(self, cv_img):
+        h, w, ch = cv_img.shape
+        q_img = QImage(
+            cv_img.data, w, h, ch * w, QImage.Format.Format_RGB888
+        ).rgbSwapped()
+        self.video_label.setPixmap(QPixmap.fromImage(q_img))
+
+    # ──────────────────────────────────────────────────────────────────
+    # Keyboard control
+    # ──────────────────────────────────────────────────────────────────
 
     def keyPressEvent(self, event):
         key = event.text().lower()
 
-        # ==========================================
-        # 1. VÄLJ JOINT (5, 6, 7, 8, 9, 0 eller K)
-        # ==========================================
+        # Joint selection (5-0 keys)
         joint_map = {'5': 0, '6': 1, '7': 2, '8': 3, '9': 4, '0': 5}
         if key in joint_map:
             self.selected_joint = joint_map[key]
-            self.label_joint_status.setText(f"Vald Joint: {self.selected_joint + 1} (Bit {self.selected_joint + 2})")
-            print(f"Vald Joint: {self.selected_joint + 1}")
-            return
-        elif key == 'k':
-            self.selected_joint = 6
-            self.label_joint_status.setText("Vald Joint: KAMERA")
-            print("Vald: Kamera")
+            self.lbl_joint.setText(f"Vald joint: J{self.selected_joint + 1}")
             return
 
-        # ==========================================
-        # 2. STYR ARM (+, -, .)
-        # ==========================================
+        # Camera selection
+        if key == 'k':
+            self.selected_joint = 6
+            self.lbl_joint.setText("Vald joint: KAMERA")
+            return
+
+        # Arm movement (+, -, .)
         arm_moves = {'+': 'inc', '-': 'dec', '.': 'stop'}
         if key in arm_moves:
-            if hasattr(self, 'selected_joint'):
-                action_byte = protocol.encode_arm_action(self.selected_joint, arm_moves[key])
-                # Target = 0x01 (Arm)
-                pkt = protocol.build_command_packet(self.current_state, 0x01, action_byte)
-                self.udp_sock.sendto(pkt, (ROBOT_IP, UDP_PORT))
-            else:
-                print("Välj en joint (5-0 eller K) först!")
+            action_byte = protocol.encode_arm_action(self.selected_joint, arm_moves[key])
+            pkt = protocol.build_command_packet(self.current_state, 0x01, action_byte)
+            self.udp_sock.sendto(pkt, (ROBOT_IP, UDP_PORT))
             return
 
-        # ==========================================
-        # 3. STYR HJUL (W, A, S, D, Q, E, O)
-        # ==========================================
-        wheel_keys = ['w', 'a', 's', 'd', 'q', 'e', 'o']
-        if key in wheel_keys:
-            if key == 'o':
-                self.current_state = 0x00 if self.current_state == 0x02 else 0x02
-                print(f"State ändrat till: {hex(self.current_state)}")
-            
-            # Target = 0x00 (Hjul)
+        # Wheel control (WASD + diagonals)
+        if key in ('w', 'a', 's', 'd', 'q', 'e'):
             pkt = protocol.build_command_packet(self.current_state, 0x00, key)
             self.udp_sock.sendto(pkt, (ROBOT_IP, UDP_PORT))
 
+    # ──────────────────────────────────────────────────────────────────
+    # Clean shutdown
+    # ──────────────────────────────────────────────────────────────────
+
     def closeEvent(self, event):
+        self.tele_thread.stop()
+        self.tele_thread.wait(2000)
         self.video_thread.terminate()
-        self.tele_thread.running = False
-        self.tele_thread.terminate()
+        self.udp_sock.close()
         super().closeEvent(event)
+
 
 if __name__ == "__main__":
     from PyQt6.QtWidgets import QApplication
     app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
+    w = MainWindow()
+    w.show()
     sys.exit(app.exec())
