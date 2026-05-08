@@ -86,7 +86,7 @@ void build_motor_packet(unsigned char out[PACKET_SIZE],
 
 void build_telemetry_packet(unsigned char out[PACKET_SIZE + 6],
                             uint8_t phase, char action, char next_action,
-                            uint8_t line_var_f, uint8_t gyro1, uint8_t gyro2,
+                            uint8_t ir, uint8_t gyro1, uint8_t gyro2,
                             uint8_t flags, uint8_t node,
                             uint8_t item_idx, uint8_t item_count,
                             char direction, uint8_t action_done) {
@@ -94,7 +94,7 @@ void build_telemetry_packet(unsigned char out[PACKET_SIZE + 6],
     out[1]  = phase;
     out[2]  = (unsigned char)action;
     out[3]  = (unsigned char)next_action;
-    out[4]  = line_var_f;
+    out[4]  = ir;
     out[5]  = gyro1;
     out[6]  = gyro2;
     out[7]  = flags;
