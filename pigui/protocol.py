@@ -1,19 +1,59 @@
 import struct
 
+def build_command_packet(state, target, action_val):
+    """
+    Bygger ett 8-byte 0x05 command packet.
+    target: 0x00 för Hjul ("wheel"), 0x01 för Arm ("arm") eller direkt hex-värde.
+    action_val: Kan vara en sträng (t.ex. 'f' för hjul) eller ett heltal (0-255 för arm).
+    """
+    if isinstance(target, str):
+        target_byte = 0x00 if target == "wheel" else 0x01
+    else:
+        target_byte = target
 
-def build_command_packet(state, target, action_char):
-    """Build an 8-byte 0x05 command packet."""
-    target_byte = 0x00 if target == "wheel" else 0x01
-    action_byte = ord(str(action_char)[0])
-    
+    # Hantera både karaktärer (för hjul) och rena bytes (för armen)
+    if isinstance(action_val, str):
+        action_byte = ord(action_val[0])
+    else:
+        action_byte = action_val & 0xFF
+        
     return struct.pack('BBBBBBBB',
                        0x05, state, target_byte, action_byte,
                        0x00, 0x00, 0x00, 0xFF)
 
+def encode_arm_action(joint_index, movement_type):
+    """
+    Packar vilken joint och vilken rörelse till ETT byte (8-bitar) för styrmodulen.
+    
+    Bit 0-1 (Rörelse): 10=Öka, 01=Minska, 00=Stanna.
+    Bit 2-7 (Joint): Vilken motor som ska styras.
+    
+    joint_index: 0-5 för Joint 1-6, 6 för Kamera.
+    movement_type: 'inc' (+), 'dec' (-), 'stop' (.)
+    """
+    # 1. Mask för rörelseriktning
+    move_bits = 0b00
+    if movement_type == 'inc':
+        move_bits = 0b10
+    elif movement_type == 'dec':
+        move_bits = 0b01
+    
+    # 2. Mask för rätt servo/joint
+    joint_mask = 0
+    if joint_index == 6:  
+        # Kamera (Aktivera alla bits från 2 till 7)
+        joint_mask = 0b111111 
+    else:
+        # Specificerad joint (1 skiftat 'joint_index' steg till vänster)
+        joint_mask = (1 << joint_index)
+        
+    # 3. Pussla ihop (Skifta upp joint-masken 2 steg och lägg in move_bits)
+    encoded_byte = (joint_mask << 2) | move_bits
+    return encoded_byte
 
 def build_item_list_packet(item_edges):
-    """Build a variable-length 0x07 item-list packet.
-    
+    """
+    Bygger ett variabellångt 0x07 paket för varulistan.
     Format: [0x07, N, u1, v1, u2, v2, ..., 0xFF]
     """
     if not item_edges:
@@ -28,9 +68,10 @@ def build_item_list_packet(item_edges):
     
     return struct.pack(fmt, *values)
 
-
 def parse_telemetry(data):
-    """Parse a 14-byte telemetry packet into a dict. Returns None if invalid."""
+    """
+    Tolkar ett 14-byte telemetripaket till en dict. Returnerar None om ogiltigt.
+    """
     if len(data) != 14 or data[0] != 0x06 or data[13] != 0xFF:
         return None
     
@@ -39,12 +80,12 @@ def parse_telemetry(data):
         'phase': unpacked[1],
         'action': chr(unpacked[2]),
         'next_action': chr(unpacked[3]),
-        'line_var': unpacked[4],
+        'line_var_f': unpacked[4],
         'gyro1': unpacked[5],
         'gyro2': unpacked[6],
         'flags': unpacked[7],
-        'current_node': unpacked[8],
-        'current_item': unpacked[9],
+        'node': unpacked[8],
+        'item_idx': unpacked[9],
         'item_count': unpacked[10],
         'direction': chr(unpacked[11]),
         'action_done': unpacked[12]
