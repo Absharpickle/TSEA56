@@ -1,5 +1,11 @@
 .DS_Store
 .atsuo
+<<<<<<< HEAD
 .code-workspace
 __pycache__
 .pytest_cache
+=======
+.pyc
+.code-workspace
+__pycache__
+>>>>>>> main
