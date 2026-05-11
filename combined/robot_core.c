@@ -39,7 +39,6 @@ bool is_picking_up = false;
 char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'h' (höger)
 bool is_dropping   = false;
 bool is_hinder = false;
-bool is_hinder2 = false;
 bool drop_step_done = false;
 long long action_timer_start = 0;
 uint8_t korsning_aktiv = 0;
@@ -271,18 +270,13 @@ int main() {
             flags_ir = (flags & 0x10) >> 4;
 
             // Logik för att avgöra om vi ska reagera på hindret
-            if (is_hinder2) {
-                // Om vi redan har hanterat ett hinder nyligen (cooldown/spärr)
-                is_hinder = false;
-            } 
-            else if (flags_ir == 1) {
+          
+            if (flags_ir == 0b00000001) {
                 // Om IR-sensorn ser ett hinder och vi inte har en spärr
                 is_hinder = true;
+                break;
             } 
-            else {
-                // Kusten är klar
-                is_hinder = false;
-            }
+        
             
             if (flags_korsning == 1)      pickup_cmd = 'v';
             else if (flags_korsning == 3) pickup_cmd = 'h';
@@ -356,14 +350,8 @@ int main() {
 
             if (is_hinder){
                
-                
-                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
-                if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
-                usleep(1000000);
-                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
-                if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
-                usleep(1000000);
-                is_hinder2 = true;
+                exit;
+              
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
                     vag[current_node - 10][current_node - 5] = 0;
