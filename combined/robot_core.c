@@ -65,7 +65,7 @@ bool rotation_done = false;
 bool pickup_step_done = false;
 // Sätts till 1 av styrmodul via I2C när en åtgärd är klar
 unsigned char stop_pkt[PACKET_SIZE];
-int print_timer = 1000;
+int print_timer = 20;
 
 
 
@@ -725,7 +725,7 @@ int main() {
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
         
-        if (print_timer == 1000){
+        if (print_timer == 20){
             printf("%c ", beslut_till_vara[1]);
             print_timer = 0;
         }
