@@ -64,7 +64,7 @@ uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
 // Sätts till 1 av styrmodul via I2C när en åtgärd är klar
-
+unsigned char stop_pkt[PACKET_SIZE];
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder
 // =================================================================
@@ -351,6 +351,10 @@ int main() {
 
             if (is_hinder){
                
+              
+                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
+                if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+                usleep(100000000)
                 is_hinder2 = true;
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
@@ -566,7 +570,7 @@ int main() {
                     nasta_beslut  = 's';
                     printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
 
-                    unsigned char stop_pkt[PACKET_SIZE];
+                    //unsigned char stop_pkt[PACKET_SIZE];
                     build_motor_packet(stop_pkt, current_auto_state, false,
                                        's', line_var_f, line_var_b, gyro1, gyro2);
                     if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
