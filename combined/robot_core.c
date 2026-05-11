@@ -39,6 +39,7 @@ bool is_picking_up = false;
 char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'h' (höger)
 bool is_dropping   = false;
 bool is_hinder = false;
+bool is_hinder2 = false;
 bool drop_step_done = false;
 long long action_timer_start = 0;
 uint8_t korsning_aktiv = 0;
@@ -267,7 +268,10 @@ int main() {
                 flags_ny_korsning = (flags & 0x20) >> 4; 
             }
             flags_ir = (flags & 0x10) >> 3;
-            if (flags_ir == 1){
+            if (is_hinder2 = true){
+                is_hinder = false;
+            }
+            else if (flags_ir == 1){
                 is_hinder = true;
             }
             else{
@@ -346,7 +350,7 @@ int main() {
 
             if (is_hinder){
                
-                
+                is_hinder2 = true;
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
                     vag[current_node - 10][current_node - 5] = 0;
