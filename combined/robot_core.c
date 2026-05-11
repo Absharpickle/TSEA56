@@ -39,6 +39,7 @@ bool is_picking_up = false;
 char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'h' (höger)
 bool is_dropping   = false;
 bool is_hinder = false;
+bool is_hinder2 = false;
 bool drop_step_done = false;
 long long action_timer_start = 0;
 uint8_t korsning_aktiv = 0;
@@ -349,7 +350,7 @@ int main() {
             
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
-            if (is_hinder){
+            if (is_hinder && !is_hinder2){
                 long long start_tid = current_time_ms();
                 
                 if (current_node == START){
@@ -388,9 +389,8 @@ int main() {
                      printf("%c ", beslut_till_vara[i]);
                 }
                
-                
-               
                 is_hinder = false;
+                is_hinder2 = true;
                 route_changed = true;
                 log_next_action = true;
             }
