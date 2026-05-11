@@ -348,6 +348,8 @@ int main() {
             long long elapsed_in_state = current_time_ms() - action_timer_start;
 
             if (is_hinder){
+                long long start_tid = current_time_ms();
+                while(current_time_ms() - start_tid < 2000){
                 if (gui_known) {
                     telemetry_counter++;
                     if (telemetry_counter >= 50) {
@@ -359,9 +361,11 @@ int main() {
                             current_dir, action_done);
                         sendto(sockfd, tpkt, (PACKET_SIZE + 6), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
                         telemetry_counter = 0;
+                        usleep(10000);
                     }
                 }
-                usleep(10000000);       
+                }
+                    
               
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
