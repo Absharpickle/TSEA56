@@ -65,7 +65,7 @@ bool rotation_done = false;
 bool pickup_step_done = false;
 // Sätts till 1 av styrmodul via I2C när en åtgärd är klar
 unsigned char stop_pkt[PACKET_SIZE];
-int print_timer = = 0;
+int print_timer = 0;
 
 
 
