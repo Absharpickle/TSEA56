@@ -351,9 +351,7 @@ int main() {
 
             if (is_hinder){
                 long long start_tid = current_time_ms();
-                while(current_time_ms() - start_tid < 2000){
-                printf("robothinder");
-                }    
+                
               
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
@@ -373,10 +371,19 @@ int main() {
                 }
                 current_action_index = 0;
                 
+                while(current_time_ms() - start_tid < 2000) {
+                    printf("Väntar! Rutt-nod: %d\n", rutt_till_vara[current_action_index]);
+                    usleep(50000); // Pausar i 50 millisekunder
+                }
+                
                 planera_till_vara(current_node, current_dir);
                 aktivt_beslut_fn(current_action_index);
                 
-        
+                while(current_time_ms() - start_tid < 2000) {
+                    printf("Väntar! Rutt-nod: %d\n", rutt_till_vara[current_action_index]);
+                    usleep(50000); // Pausar i 50 millisekunder
+                }
+                
                
                 is_hinder = false;
                 route_changed = true;
