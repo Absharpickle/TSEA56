@@ -262,20 +262,25 @@ int main() {
             gyro1      = sd.gyro1;
             gyro2      = sd.gyro2;
 
-            flags_korsning = (flags & 0x0C) >> 2;
-            
+                        // Läs av ny_korsning-flaggan (0x20 är bit 5, så vi skiftar 5 steg)
             if (!flags_ny_korsning) {
-                flags_ny_korsning = (flags & 0x20) >> 4; 
+                flags_ny_korsning = (flags & 0x20) >> 5; 
             }
+
+            // Läs av IR-flaggan (0x10 är bit 4, så vi skiftar 4 steg)
             flags_ir = (flags & 0x10) >> 4;
-          
-            if (is_hinder2 == true){
+
+            // Logik för att avgöra om vi ska reagera på hindret
+            if (is_hinder2) {
+                // Om vi redan har hanterat ett hinder nyligen (cooldown/spärr)
                 is_hinder = false;
-            }
-            else if (flags_ir == 1){
+            } 
+            else if (flags_ir == 1) {
+                // Om IR-sensorn ser ett hinder och vi inte har en spärr
                 is_hinder = true;
-            }
-            else{
+            } 
+            else {
+                // Kusten är klar
                 is_hinder = false;
             }
             
@@ -351,10 +356,10 @@ int main() {
 
             if (is_hinder){
                
-              
-                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
-                if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
-                usleep(100000000);
+                while(1){
+                    build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
+                    if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+                }
                 is_hinder2 = true;
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
