@@ -319,6 +319,7 @@ int main() {
             } else if (cmd.state == 0x02 || cmd.state == 0x03) {
                 if (current_phase != PHASE_IDLE) {
                     printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+                    init_karta();
                     current_phase        = PHASE_IDLE;
                     is_rotating          = false;
                     is_picking_up        = false;
