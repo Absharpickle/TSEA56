@@ -36,6 +36,7 @@ bool log_next_action         = false;
 bool is_rotating   = false;
 char pending_rotation_cmd = ' ';
 bool is_picking_up = false;
+bool pickup_stop_done = false; // För att skicka 'x' innan 'v'/'h'
 char pickup_cmd    = 'v';
 bool is_dropping   = false;
 bool drop_step_done = false;
@@ -49,7 +50,7 @@ long long sim_segment_timer = 0;
 
 // --- TELEMETRY GLOBALS ---
 bool gui_known        = false;
-uint32_t telemetry_counter = 0;  // FIX: uint32_t för att undvika int-overflow
+uint32_t telemetry_counter = 0;
 bool route_changed    = false;
 
 // --- LIVE STATE ---
@@ -96,9 +97,7 @@ void log_styr_response(const unsigned char *received) {
 }
 
 // =================================================================
-// FIX #2: Bounds-check på index+1 i aktivt_beslut_fn
-// Läs alltid nästa beslut ur arrayen för nasta_beslut,
-// även vid 'e'/'o' – så att nasta_beslut är korrekt efter rotation klar.
+// Beslutshanterare
 // =================================================================
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
@@ -122,10 +121,7 @@ void aktivt_beslut_fn(int index) {
 }
 
 // =================================================================
-// Hjälpfunktion: starta rotation om nästa beslut kräver sväng,
-// annars logga direkt.
-// Obs: 'X' och 'b' hanteras separat i korsningslogiken med rätt
-// stoppkommando ('x' resp. 'z') – når aldrig hit för dessa värden.
+// Starta rotation eller logga
 // =================================================================
 static void maybe_start_rotation_or_log() {
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
@@ -182,7 +178,6 @@ void init_system(SystemPointers *sys) {
     if (clr) fclose(clr);
     printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
-    // FIX: Öppna separata file descriptors för styr respektive sensor
     sys->i2c_styr_fd = open(I2C_DEVICE, O_RDWR);
     if (sys->i2c_styr_fd >= 0) {
         ioctl(sys->i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR);
@@ -197,10 +192,8 @@ void init_system(SystemPointers *sys) {
         printf("[SIM] Could not open I2C for Motor Controller. Motor writes disabled.\n");
     }
 
-    // FIX: Ny open()-anrop för sensorn så att fd inte delar instans med styrfd
     sys->i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
     if (sys->i2c_sens_fd >= 0) {
-        // FIX: Säkerställ att vi verkligen sätter sensor-adressen på den nya fd:n
         if (ioctl(sys->i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR) < 0) {
             close(sys->i2c_sens_fd);
             sys->i2c_sens_fd = -1;
@@ -267,16 +260,13 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
 
         *flags_korsning = (*flags & 0x0C) >> 2;
 
-        // Bit 5 (0x20): ny korsningshändelse – sätts bara om den inte redan är aktiv
         if (!(*flags_ny_korsning)) {
             *flags_ny_korsning = (*flags & 0x20) >> 5;
         }
 
-        // Bit 4 (0x10): hinder detekterat
         *obstacle_detected = (*flags & 0x10) != 0;
 
-        // FIX #5: Spara pickup_cmd när vi är vid pickup-noden, inte löpande
-        // pickup_cmd sätts här bara om vi faktiskt är på väg att plocka upp
+        // Om vi är på väg mot pickup och har stött på trevägskorsningen
         if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
             if (*flags_korsning == 1)      pickup_cmd = 'v';
             else if (*flags_korsning == 3) pickup_cmd = 'h';
@@ -306,7 +296,6 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
                 printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
             }
         } else if (cmd.state == 0x02 || cmd.state == 0x03) {
-            // FIX: Återställ item_count och listor vid override så att state är konsistent
             init_karta();
             item_count = 0;
             memset(item_list_u, 0, sizeof(item_list_u));
@@ -317,6 +306,7 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
                 current_phase        = PHASE_IDLE;
                 is_rotating          = false;
                 is_picking_up        = false;
+                pickup_stop_done     = false;
                 is_dropping          = false;
                 current_action_index = 0;
                 korsning_aktiv       = 0;
@@ -343,11 +333,10 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
 }
 
 // =================================================================
-// FIX #1: Hjälpfunktion som triggar PHASE_DROP när hemrutten är slut
+// Droppsekvens
 // =================================================================
 static void start_drop_sequence(SystemPointers *sys, uint8_t line_var_f,
                                  uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2) {
-    // FIX #7: Verifiera att vi faktiskt är vid START-noden
     if (current_node != START) {
         printf("[!] VARNING: Försöker droppa men current_node=%d, förväntat START=%d\n",
                current_node, START);
@@ -357,7 +346,6 @@ static void start_drop_sequence(SystemPointers *sys, uint8_t line_var_f,
     is_dropping    = true;
     drop_step_done = false;
 
-    // Steg 1: Stanna roboten med 'z' (bromsande stopp) innan 'w' (drop)
     aktivt_beslut = 'z';
     nasta_beslut  = 'w';
     action_timer_start = current_time_ms();
@@ -379,7 +367,7 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     long long elapsed_in_state = current_time_ms() - action_timer_start;
 
     // =================================================================
-    // HINDERHANTERING (DELAY & OMKALKYLERING)
+    // HINDERHANTERING
     // =================================================================
     if (is_handling_obstacle) {
         if (current_time_ms() - obstacle_timer_start >= 500) {
@@ -395,7 +383,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         }
     }
 
-    // Hinderdetektion
     if (obstacle_detected && !is_handling_obstacle && !is_rotating &&
         !is_picking_up && !is_dropping && korsning_aktiv == 0) {
 
@@ -409,9 +396,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
 
         if (approaching_node >= 0 && approaching_node < NODES) {
             int blocked_node = -1;
-
-            // FIX #3: Beräkna riktningen UT från approaching_node baserat på rutten,
-            // inte current_dir som är riktningen IN till noden.
             char exit_dir = ' ';
             if (current_action_index + 2 < NODES) {
                 int node_after = current_route[current_action_index + 2];
@@ -422,14 +406,12 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
 
             for (int i = 0; i < NODES; i++) {
                 if (vag[approaching_node][i]) {
-                    // Matcha med utgångsriktning om vi kunde ta reda på den
                     if (exit_dir != ' ') {
                         if (nodriktningsmatris[approaching_node][i] == exit_dir) {
                             blocked_node = i;
                             break;
                         }
                     } else {
-                        // Fallback: använd current_dir om vi är på sista segmentet
                         if (nodriktningsmatris[approaching_node][i] == current_dir) {
                             blocked_node = i;
                             break;
@@ -470,16 +452,16 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             }
         }
     }
-    // =================================================================
 
-    // --- ROTATIONSHANTERING ---
+    // =================================================================
+    // ROTATIONSHANTERING
+    // =================================================================
     if (is_rotating) {
         unsigned char rot_pkt[PACKET_SIZE];
         build_motor_packet(rot_pkt, current_auto_state, false, pending_rotation_cmd,
                            line_var_f, line_var_b, gyro1, gyro2);
 
         if (!sim_motor) {
-            // Skriv kommandot FÖRST, läs sedan svaret nästa iteration
             write(sys->i2c_styr_fd, rot_pkt, PACKET_SIZE);
             unsigned char ack_buf[PACKET_SIZE];
             if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
@@ -497,17 +479,43 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             is_rotating   = false;
             rotation_done = false;
             current_dir   = apply_turn(current_dir, pending_rotation_cmd);
-            // Efter rotation klar: nästa beslut är redan sparat i nasta_beslut
-            // (sattes av aktivt_beslut_fn när rotationen startades).
-            // Återställ aktivt_beslut och kör vidare framåt.
             aktivt_beslut = nasta_beslut;
             log_next_action = true;
         }
         return;
     }
 
-    // --- PICKUP-HANTERING ---
+    // =================================================================
+    // PICKUP-HANTERING
+    // =================================================================
     if (is_picking_up) {
+        // Steg 1: Skicka "lilla x" och vänta på bekräftelse (robothalt)
+        if (!pickup_stop_done) {
+            unsigned char xstop_pkt[PACKET_SIZE];
+            build_motor_packet(xstop_pkt, current_auto_state, false, 'x',
+                               line_var_f, line_var_b, gyro1, gyro2);
+
+            if (!sim_motor) {
+                write(sys->i2c_styr_fd, xstop_pkt, PACKET_SIZE);
+                unsigned char ack_buf[PACKET_SIZE];
+                if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
+                    StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
+                    if (resp.valid && resp.action_done == 1) {
+                        pickup_stop_done = true;
+                    }
+                }
+            } else {
+                if (elapsed_in_state > 1000) pickup_stop_done = true;
+            }
+
+            if (pickup_stop_done) {
+                action_timer_start = current_time_ms(); // Återställ inför steg 2
+                printf("-> Stopp ('x') bekräftat. Påbörjar pickup ('%c')...\n", pickup_cmd);
+            }
+            return;
+        }
+
+        // Steg 2: Själva upphämtningen med v eller h
         unsigned char pick_pkt[PACKET_SIZE];
         build_motor_packet(pick_pkt, current_auto_state, true, pickup_cmd,
                            line_var_f, line_var_b, gyro1, gyro2);
@@ -528,6 +536,7 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         if (pickup_step_done) {
             is_picking_up    = false;
             pickup_step_done = false;
+            pickup_stop_done = false; // Återställning inför nästa gång
             current_item_index++;
 
             if (current_item_index < item_count) {
@@ -558,7 +567,9 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         return;
     }
 
-    // --- DROP-HANTERING ---
+    // =================================================================
+    // DROP-HANTERING
+    // =================================================================
     if (is_dropping) {
         unsigned char drop_pkt[PACKET_SIZE];
         build_motor_packet(drop_pkt, current_auto_state, true, aktivt_beslut,
@@ -583,7 +594,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
 
         if (drop_step_done) {
             if (aktivt_beslut == 'z' || aktivt_beslut == 's') {
-                // Steg 1 klart: byt till drop-kommando 'w'
                 aktivt_beslut  = 'w';
                 drop_step_done = false;
                 action_timer_start = current_time_ms();
@@ -591,7 +601,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                 log_next_action = true;
                 printf("\n-> Robot stoppad. Skickar drop-kommando ('w')...\n");
             } else if (aktivt_beslut == 'w') {
-                // Steg 2 klart: uppdraget avslutat
                 is_dropping    = false;
                 drop_step_done = false;
 
@@ -612,9 +621,7 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     }
 
     // =================================================================
-    // KORSNINGSLOGIK
-    // Triggar på flags_ny_korsning (original) ELLER egen detektion baserad
-    // på flags_korsning: triggar på stigande flank (0 -> != 0).
+    // KORSNINGSLOGIK & PICKUP-DETEKTION
     // =================================================================
     static uint8_t prev_flags_korsning = 0;
     bool korsning_stigning = (prev_flags_korsning == 0 && flags_korsning != 0);
@@ -630,66 +637,80 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         if (sim_sensor) sim_segment_timer = current_time_ms();
 
         korsning_aktiv = 1;
-        current_action_index++;
 
-        if (current_phase == PHASE_TO_ITEM) {
-            if (current_action_index < NODES)
-                current_node = rutt_till_vara[current_action_index];
-        } else if (current_phase == PHASE_TO_HOME) {
-            if (current_action_index < NODES)
-                current_node = rutt_hem[current_action_index];
-        }
-
-        aktivt_beslut_fn(current_action_index);
-
-        if (aktivt_beslut == 'X') {
-            // Skicka 'x' som stoppkommando inför pickup
+        if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
+            // VI HAR NÅTT TREVÄGSKORSNINGEN (UPPHÄMTNINGSPLATSEN)
+            // Vi sparar inte en ny nod här, eftersom vi stannar på sträckan!
             unsigned char xstop_pkt[PACKET_SIZE];
             build_motor_packet(xstop_pkt, current_auto_state, false, 'x',
                                line_var_f, line_var_b, gyro1, gyro2);
             if (!sim_motor) write(sys->i2c_styr_fd, xstop_pkt, PACKET_SIZE);
             log_verification(xstop_pkt, 'x');
+
             is_picking_up = true;
+            pickup_stop_done = false; // Sätt till false för att börja med stopp-sekvensen
             action_timer_start = current_time_ms();
-        } else if (aktivt_beslut == 'b') {
-            // Skicka 'z' som stoppkommando inför backning
-            unsigned char zstop_pkt[PACKET_SIZE];
-            build_motor_packet(zstop_pkt, current_auto_state, false, 'z',
-                               line_var_f, line_var_b, gyro1, gyro2);
-            if (!sim_motor) write(sys->i2c_styr_fd, zstop_pkt, PACKET_SIZE);
-            log_verification(zstop_pkt, 'z');
-            log_next_action = true;
+            printf("\n-> T-korsning upptäckt! Stannar med 'x' inför pickup.\n");
         } else {
-            maybe_start_rotation_or_log();
-        }
+            // VANLIG NOD - Fortsätt iterera framåt i rutten
+            current_action_index++;
 
-        // FIX #1: Kolla om hemrutten är slut – trigga drop om vi är hemma
-        if (current_phase == PHASE_TO_HOME) {
-            // Rutten är slut när nästa beslut är 's' och vi nått START
-            // beslut_hem-arrayen avslutas med en nollterminering eller sentinel
-            bool home_route_done = false;
-            if (current_action_index < NODES) {
-                // Om beslutet vid denna nod är 's' och noden är START = framme
-                home_route_done = (current_node == START && aktivt_beslut == 's');
+            if (current_phase == PHASE_TO_ITEM) {
+                if (current_action_index < NODES)
+                    current_node = rutt_till_vara[current_action_index];
+            } else if (current_phase == PHASE_TO_HOME) {
+                if (current_action_index < NODES)
+                    current_node = rutt_hem[current_action_index];
             }
-            if (home_route_done) {
-                start_drop_sequence(sys, line_var_f, line_var_b, gyro1, gyro2);
-                return;
+
+            aktivt_beslut_fn(current_action_index);
+
+            if (aktivt_beslut == 'b') {
+                unsigned char zstop_pkt[PACKET_SIZE];
+                build_motor_packet(zstop_pkt, current_auto_state, false, 'z',
+                                   line_var_f, line_var_b, gyro1, gyro2);
+                if (!sim_motor) write(sys->i2c_styr_fd, zstop_pkt, PACKET_SIZE);
+                log_verification(zstop_pkt, 'z');
+                log_next_action = true;
+            } else {
+                // Skickar in eventuella svängar (inte 'X') till motorn
+                maybe_start_rotation_or_log();
+            }
+
+            // Kolla om hemrutten är slut
+            if (current_phase == PHASE_TO_HOME) {
+                bool home_route_done = false;
+                if (current_action_index < NODES) {
+                    home_route_done = (current_node == START && aktivt_beslut == 's');
+                }
+                if (home_route_done) {
+                    start_drop_sequence(sys, line_var_f, line_var_b, gyro1, gyro2);
+                    return;
+                }
             }
         }
-
     } else if (!intersection_trigger) {
         korsning_aktiv = 0;
     }
 
-    // Skicka aktivt beslut var 5:e loop-iteration
+    // =================================================================
+    // KONTINUERLIG UTSKRIFT TILL MOTOR (VAR 5:e LOOP)
+    // =================================================================
     if (loop_counter % 5 == 0) {
+        char cmd_to_send = aktivt_beslut;
+
+        // Om vi aktivt letar efter en upphämtningsplats vill vi skicka 'f'
+        // till motorerna så att roboten rör sig framåt längs sträckan.
+        if (cmd_to_send == 'X') {
+            cmd_to_send = 'f';
+        }
+
         unsigned char m_pkt[PACKET_SIZE];
-        build_motor_packet(m_pkt, current_auto_state, false, aktivt_beslut,
+        build_motor_packet(m_pkt, current_auto_state, false, cmd_to_send,
                            line_var_f, line_var_b, gyro1, gyro2);
         if (!sim_motor) write(sys->i2c_styr_fd, m_pkt, PACKET_SIZE);
         if (log_next_action) {
-            log_verification(m_pkt, aktivt_beslut);
+            log_verification(m_pkt, cmd_to_send);
             log_next_action = false;
         }
     }
@@ -700,7 +721,6 @@ void send_telemetry_and_routes(SystemPointers *sys, uint8_t line_var_f,
                                 uint8_t gyro1, uint8_t gyro2, uint8_t flags) {
     if (!gui_known) return;
 
-    // FIX: uint32_t räknare – räcker i 3+ år vid 40 Hz
     if (telemetry_counter++ % 25 == 0) {
         unsigned char tpkt[PACKET_SIZE + 6];
         build_telemetry_packet(tpkt, (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
