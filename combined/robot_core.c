@@ -65,6 +65,12 @@ bool rotation_done = false;
 bool pickup_step_done = false;
 // Sätts till 1 av styrmodul via I2C när en åtgärd är klar
 unsigned char stop_pkt[PACKET_SIZE];
+int print_timer = = 0;
+
+
+
+
+
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder
 // =================================================================
@@ -275,7 +281,6 @@ int main() {
             if (flags_ir == 0b00000001) {
                 // Om IR-sensorn ser ett hinder och vi inte har en spärr
                 is_hinder = true;
-                printf("hora f");
             } 
         
             
@@ -374,21 +379,10 @@ int main() {
                     vag[current_node - 2][current_node - 1] = 0;
                 }
                 current_action_index = 0;
-                
-
-                for(int i = 0; i < NODES; i++) { 
-                    printf("%c ", beslut_till_vara[i]);
-                }
-            
-              
+                 
                 planera_till_vara(current_node, current_dir);
                 aktivt_beslut_fn(current_action_index);
-                
-            
-                for(int i = 0; i < NODES; i++) { 
-                     printf("%c ", beslut_till_vara[i]);
-                }
-               
+                            
                 is_hinder = false;
                 is_hinder2 = true;
                 route_changed = true;
@@ -730,7 +724,12 @@ int main() {
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
-        printf("%c ", beslut_till_vara[1]);
+        
+        if (print_timer == 1000){
+            printf("%c ", beslut_till_vara[1]);
+            print_timer = 0;
+        }
+        print_timer++;
         usleep(25000); 
     }
 
