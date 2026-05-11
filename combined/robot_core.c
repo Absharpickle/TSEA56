@@ -274,6 +274,7 @@ int main() {
             if (flags_ir == 0b00000001) {
                 // Om IR-sensorn ser ett hinder och vi inte har en spärr
                 is_hinder = true;
+                printf("hora f");
             } 
         
             
@@ -342,7 +343,8 @@ int main() {
 
         // ---------------------------------------------------------
         // 3. AUTONOMOUS STATE MACHINE
-        // ---------------------------------------------------------
+
+       
         if (current_phase != PHASE_IDLE) { 
             
             long long elapsed_in_state = current_time_ms() - action_timer_start;
@@ -350,22 +352,8 @@ int main() {
             if (is_hinder){
                 long long start_tid = current_time_ms();
                 while(current_time_ms() - start_tid < 2000){
-                if (gui_known) {
-                    telemetry_counter++;
-                    if (telemetry_counter >= 50) {
-                        unsigned char tpkt[PACKET_SIZE + 6];
-                        build_telemetry_packet(tpkt,
-                            (uint8_t)current_phase, 'X', 'X',
-                            line_var_f, gyro1, gyro2, flags, current_node,
-                            (uint8_t)current_item_index, (uint8_t)item_count,
-                            current_dir, action_done);
-                        sendto(sockfd, tpkt, (PACKET_SIZE + 6), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
-                        telemetry_counter = 0;
-                        usleep(10000);
-                    }
-                }
-                }
-                    
+                printf("robothinder");
+                }    
               
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
