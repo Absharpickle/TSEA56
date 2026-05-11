@@ -270,11 +270,7 @@ int main() {
             // Läs av IR-flaggan (0x10 är bit 4, så vi skiftar 4 steg)
             flags_ir = (flags & 0x10) >> 4;
 
-            // Logik för att avgöra om vi ska reagera på hindret
-            if (is_hinder2) {
-                // Om vi redan har hanterat ett hinder nyligen (cooldown/spärr)
-                is_hinder = false;
-            } 
+          
             else if (flags_ir == 1) {
                 // Om IR-sensorn ser ett hinder och vi inte har en spärr
                 is_hinder = true;
@@ -356,11 +352,15 @@ int main() {
 
             if (is_hinder){
                
-                while(1){
-                    build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
-                    if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
-                }
-                is_hinder2 = true;
+                
+                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
+                write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+                usleep(1000000);
+                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
+                write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+                usleep(1000000);
+
+               
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
                     vag[current_node - 10][current_node - 5] = 0;
