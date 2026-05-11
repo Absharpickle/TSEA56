@@ -493,6 +493,8 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                            line_var_f, line_var_b, gyro1, gyro2);
 
         if (!sim_motor) {
+            // Skriv kommandot FÖRST, läs sedan svaret nästa iteration
+            write(sys->i2c_styr_fd, rot_pkt, PACKET_SIZE);
             unsigned char ack_buf[PACKET_SIZE];
             if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
                 log_styr_response(ack_buf);
@@ -501,7 +503,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                     rotation_done = true;
                 }
             }
-            write(sys->i2c_styr_fd, rot_pkt, PACKET_SIZE);
         } else {
             if (elapsed_in_state > 2000) rotation_done = true;
         }
@@ -523,6 +524,7 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                            line_var_f, line_var_b, gyro1, gyro2);
 
         if (!sim_motor) {
+            write(sys->i2c_styr_fd, pick_pkt, PACKET_SIZE);
             unsigned char ack_buf[PACKET_SIZE];
             if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
                 StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
@@ -530,7 +532,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                     pickup_step_done = true;
                 }
             }
-            write(sys->i2c_styr_fd, pick_pkt, PACKET_SIZE);
         } else {
             if (elapsed_in_state > 3000) pickup_step_done = true;
         }
@@ -575,6 +576,7 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                            line_var_f, line_var_b, gyro1, gyro2);
 
         if (!sim_motor) {
+            write(sys->i2c_styr_fd, drop_pkt, PACKET_SIZE);
             unsigned char ack_buf[PACKET_SIZE];
             if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
                 StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
@@ -582,7 +584,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                     drop_step_done = true;
                 }
             }
-            write(sys->i2c_styr_fd, drop_pkt, PACKET_SIZE);
         } else {
             if ((aktivt_beslut == 'z' || aktivt_beslut == 's') && elapsed_in_state >= 1500) {
                 drop_step_done = true;
