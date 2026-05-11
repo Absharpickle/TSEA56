@@ -274,7 +274,6 @@ int main() {
             if (flags_ir == 0b00000001) {
                 // Om IR-sensorn ser ett hinder och vi inte har en spärr
                 is_hinder = true;
-                break;
             } 
         
             
@@ -350,7 +349,7 @@ int main() {
 
             if (is_hinder){
                
-                exit;
+                break;
               
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
