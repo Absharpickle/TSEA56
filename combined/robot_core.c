@@ -372,7 +372,9 @@ int main() {
                 current_action_index = 0;
                 
                 while(current_time_ms() - start_tid < 2000) {
-                    printf("Väntar! Rutt-nod: %d\n", rutt_till_vara[current_action_index]);
+                    for(int i = 0; i < NODES; i++) { 
+                        printf("%c ", beslut_till_vara[i]); // Viktigt: %c för bokstäver/tecken
+                    }
                     usleep(50000); // Pausar i 50 millisekunder
                 }
                 
@@ -380,9 +382,12 @@ int main() {
                 aktivt_beslut_fn(current_action_index);
                 
                 while(current_time_ms() - start_tid < 2000) {
-                    printf("Väntar! Rutt-nod: %d\n", rutt_till_vara[current_action_index]);
+                    for(int i = 0; i < NODES; i++) { 
+                        printf("%c ", beslut_till_vara[i]); // Viktigt: %c för bokstäver/tecken
+                    }
                     usleep(50000); // Pausar i 50 millisekunder
                 }
+                
                 
                
                 is_hinder = false;
