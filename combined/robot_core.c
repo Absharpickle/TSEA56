@@ -374,7 +374,12 @@ int main() {
                 }
                 current_action_index = 0;
                 
-                while(current_time_ms() - start_tid < 2000) {
+           
+              
+                planera_till_vara(current_node, current_dir);
+                aktivt_beslut_fn(current_action_index);
+                
+                 while(current_time_ms() - start_tid < 2000) {
                     for(int i = 0; i < NODES; i++) { 
                         printf("%i ", vag[0][5]);
                         printf("%i ", current_node);
@@ -383,11 +388,6 @@ int main() {
                     }
                     usleep(1000000); // Pausar i 50 millisekunder
                 }
-                
-              
-                planera_till_vara(current_node, current_dir);
-                aktivt_beslut_fn(current_action_index);
-                
             
                 
                
