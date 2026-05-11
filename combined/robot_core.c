@@ -63,7 +63,9 @@ char current_dir = 's';
 uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
-// Sätts till 1 av styrmodul via I2C när en åtgärd är klar
+
+int flag_timer = 0;
+int temp_flag = 0;
 
 
 
@@ -267,10 +269,13 @@ int main() {
             gyro2      = sd.gyro2;
 
             flags_korsning = (flags & 0x0C) >> 2;
-
-            if (!flags_ny_korsning) {
-                flags_ny_korsning = (flags & 0x20) >> 5; 
+            if (flags_korsning != temp_flag) {
+                if (flag_timer > 50) {
+                    flags_ny_korsning = 1;
+                }
+                temp_flag = flags_korsning; // Uppdatera bara när värdet faktiskt ändras
             }
+            
 
             // Läs av IR-flaggan (0x10 är bit 4, så vi skiftar 4 steg)
             flags_ir = (flags & 0x10) >> 4;
@@ -390,7 +395,8 @@ int main() {
             
             
             if (is_rotating) {
-                // Steg 1: Stoppa ('s' eller 'z') -> vänta på action_done -> skicka rotera ('e'/'o')
+
+                flag_timer = 0;
                 if (sim_motor) {
                     rotation_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1000) ||
                                     ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
@@ -445,7 +451,7 @@ int main() {
                 }
             } 
             else if (is_picking_up) {
-                // Steg 1: Stoppa ('x') -> vänta på action_done -> skicka 'v'
+                flag_timer = 0;
                 if (sim_motor) {
                     pickup_step_done = (aktivt_beslut == 'x' && elapsed_in_state >= 1500) ||
                                        (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
@@ -537,7 +543,7 @@ int main() {
             }
             // --- DROP STATE MACHINE ---
             else if (is_dropping) {
-                // Steg 1: Stoppa ('s'/'z') → vänta på action_done → skicka 'w'
+                flag_timer = 0;
                 if (sim_motor) {
                     drop_step_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1500) ||
                                       (aktivt_beslut == 'w' && elapsed_in_state >= 3000);
@@ -595,7 +601,7 @@ int main() {
                     bool real_intersection = (flags_korsning == 2);
                     bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X');
                     
-                    if ((real_intersection || pickup_marker) && !korsning_aktiv) {
+                    if ((flags_ny_korsning) && !korsning_aktiv) {
                         intersection_triggered = true;
                         korsning_aktiv    = 1;
                         flags_ny_korsning = 0;
@@ -723,8 +729,8 @@ int main() {
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
-        
-        usleep(50000); 
+        flag_timer++;
+        usleep(10000); 
     }
 
     close(sockfd);
