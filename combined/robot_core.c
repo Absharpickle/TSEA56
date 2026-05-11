@@ -18,7 +18,7 @@
 
 // --- SIM MODE DEFINITIONS ---
 #define SIM_SEGMENT_MS 1000
-#define SLEEP 10000
+#define SLEEP 25000
 
 // --- STATE MACHINE ---
 typedef enum {
@@ -67,7 +67,52 @@ bool pickup_step_done = false;
 
 int flag_timer = 0;
 int temp_flag = 0;
+int hinder_counter = 0;
+int hinder_timer = 0;
 
+void reset() {
+    // Ta bort "int", "bool", "char" etc. 
+    // Nu refererar vi till de globala variablerna istället för att skapa nya.
+    current_phase        = PHASE_IDLE;
+    current_action_index = 0;
+    current_auto_state   = 1;
+    log_next_action      = false;
+
+    is_rotating          = false;
+    pending_rotation_cmd = ' '; 
+    is_picking_up        = false;
+    pickup_cmd           = 'v'; 
+    is_dropping          = false;
+    is_hinder            = false;
+    is_hinder2           = false;
+    drop_step_done       = false;
+    action_timer_start   = 0;
+    korsning_aktiv       = 0;
+
+    sim_sensor           = false;
+    sim_motor            = false;
+    sim_segment_timer    = 0;
+
+    // gui_known kanske du vill behålla som true om GUI:t redan är anslutet?
+    telemetry_counter    = 0;
+    route_changed        = false; 
+
+    nasta_beslut         = 's';
+    aktivt_beslut        = 's';
+    loop_counter         = 0;
+    current_node         = START;
+    current_dir          = 's';
+    action_done          = 0;
+    rotation_done        = false;
+    pickup_step_done     = false;
+
+    flag_timer           = 0;
+    temp_flag            = 0;
+    hinder_counter       = 0;
+    hinder_timer         = 0; 
+    
+    init_karta();// Kom ihåg likhetstecknet här!
+}
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder
 // =================================================================
@@ -344,8 +389,7 @@ int main() {
         if (current_phase != PHASE_IDLE) {
 
             long long elapsed_in_state = current_time_ms() - action_timer_start;
-
-            if (is_hinder && !is_hinder2) {
+            if (is_hinder && !is_hinder2 && (hinder_counter < 4) && (hinder_timer > SLEEP/50) ) {
                 long long start_tid = current_time_ms();
 
                 if (current_node == START) {
@@ -373,10 +417,14 @@ int main() {
                 planera_till_vara(current_node, current_dir);
                 aktivt_beslut_fn(current_action_index);
 
+                
                 is_hinder = false;
                 is_hinder2 = true;
                 route_changed = true;
                 log_next_action = true;
+
+                hinder_counter++;
+                hinder_timer = 0;
             }
 
 
@@ -557,12 +605,7 @@ int main() {
                 }
                 else if (drop_step_done && aktivt_beslut == 'w') {
                     // Drop klar, allt är klart
-                    is_dropping = false;
-                    drop_step_done = false;
-                    current_phase = PHASE_IDLE;
-                    current_node  = START;
-                    aktivt_beslut = 's';
-                    nasta_beslut  = 's';
+                    reset();
                     printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
 
                     unsigned char stop_pkt[PACKET_SIZE];
@@ -583,7 +626,7 @@ int main() {
                 } else {
                     // Debounce: uppdatera temp_flag bara när värdet faktiskt ändras
                     if (flags_korsning != temp_flag) {
-                        if (flag_timer > SLEEP/1000) {
+                        if (flag_timer > SLEEP/500) {
                             bool real_intersection = (flags_korsning == 2);
                             bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X');
                             if (real_intersection || pickup_marker) {
@@ -632,7 +675,7 @@ int main() {
                         action_timer_start   = current_time_ms();
                         log_next_action      = true;
                     }
-                    else if (aktivt_beslut == 'X') {
+                    else if (aktivt_beslut == 'X' && (flags_korsning == 3 || flags_korsning == 1)) {
                         if (current_phase == PHASE_TO_ITEM) {
                             current_phase = PHASE_PICKUP;
                             aktivt_beslut = 'x';
@@ -721,6 +764,7 @@ int main() {
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
         flag_timer++;
+        hinder_timer++;
         usleep(SLEEP);
     }
 
