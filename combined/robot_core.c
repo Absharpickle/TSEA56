@@ -346,7 +346,6 @@ int main() {
 
             if (is_hinder){
                
-                int i = current_node;
                 
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
@@ -376,7 +375,7 @@ int main() {
                
                 is_hinder = false;
                 route_changed = true;
-                log_next_action true;
+                log_next_action = true;
             }
             
             
