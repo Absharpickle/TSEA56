@@ -626,7 +626,7 @@ int main() {
                 } else {
                     // Debounce: uppdatera temp_flag bara när värdet faktiskt ändras
                     if (flags_korsning != temp_flag) {
-                        if (flag_timer > SLEEP/500) {
+                        if (flag_timer > SLEEP/1500) {
                             bool real_intersection = (flags_korsning == 2);
                             bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X');
                             if (real_intersection || pickup_marker) {
@@ -675,7 +675,7 @@ int main() {
                         action_timer_start   = current_time_ms();
                         log_next_action      = true;
                     }
-                    else if (aktivt_beslut == 'X' && (flags_korsning == 3 || flags_korsning == 1)) {
+                    else if (aktivt_beslut == 'X') {
                         if (current_phase == PHASE_TO_ITEM) {
                             current_phase = PHASE_PICKUP;
                             aktivt_beslut = 'x';
