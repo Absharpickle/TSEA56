@@ -354,7 +354,7 @@ int main() {
               
                 build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
                 if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
-                usleep(100000000)
+                usleep(100000000);
                 is_hinder2 = true;
                 if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
