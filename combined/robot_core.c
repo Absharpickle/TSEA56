@@ -266,7 +266,8 @@ int main() {
             gyro1      = sd.gyro1;
             gyro2      = sd.gyro2;
 
-                        // Läs av ny_korsning-flaggan (0x20 är bit 5, så vi skiftar 5 steg)
+            flags_korsning = (flags & 0x0C) >> 2;
+
             if (!flags_ny_korsning) {
                 flags_ny_korsning = (flags & 0x20) >> 5; 
             }
