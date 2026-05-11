@@ -62,7 +62,7 @@ uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
 
-// --- HINDERHANTERING ---
+// --- HINDERHANTERING (NY) ---
 bool is_handling_obstacle = false;     
 long long obstacle_timer_start = 0;    
 
@@ -76,7 +76,7 @@ typedef struct {
 } SystemPointers;
 
 // =================================================================
-// HJÄLPFUNKTION: Tidsmätning
+// HJÄLPFUNKTION: Tidsmätning i millisekunder
 // =================================================================
 long long current_time_ms() {
     struct timeval tv;
@@ -159,6 +159,7 @@ void start_autonomous_sequence(unsigned char state) {
     log_next_action = true;
     route_changed  = true;
     printf("-> Route Calculated. Driving to item 1/%d...\n", item_count);
+    if (sim_sensor) printf("[SIM] Intersections will be triggered every %d ms\n", SIM_SEGMENT_MS);
 }
 
 void init_system(SystemPointers *sys) {
@@ -173,12 +174,13 @@ void init_system(SystemPointers *sys) {
         ioctl(sys->i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); 
         if (write(sys->i2c_styr_fd, NULL, 0) < 0) { 
             sim_motor = true;
-            printf("[SIM] Motor Controller (0x12) missing.\n"); 
+            printf("[SIM] Motor Controller (0x12) missing. Motor writes disabled.\n"); 
         } else {
             printf("Connected to Motor Controller (0x12)\n"); 
         }
     } else {
         sim_motor = true;
+        printf("[SIM] Could not open I2C for Motor Controller. Motor writes disabled.\n");
     }
 
     sys->i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
@@ -192,6 +194,7 @@ void init_system(SystemPointers *sys) {
         }
     } else {
         sim_sensor = true;
+        printf("[SIM] Could not open I2C for Sensor Board.\n");
     }
 
     if ((sys->sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { 
@@ -219,6 +222,7 @@ void init_system(SystemPointers *sys) {
     printf("Listening for UDP on port %d...\n\n", UDP_PORT);
 }
 
+// NYTT: hinder-bool tillagd
 void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b, uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2, uint8_t *flags, uint8_t *flags_korsning, uint8_t *flags_ny_korsning, bool *obstacle_detected) {
     unsigned char sensor_raw[PACKET_SIZE];
     if (!sim_sensor && sys->i2c_sens_fd >= 0 && read(sys->i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
@@ -238,11 +242,12 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
 
         *flags_korsning = (*flags & 0x0C) >> 2;
         
+        // Bit 5 (0x20) är "NY händelse" enligt sensorkoden. Vi skiftar 5 steg för att få ut 1 eller 0.
         if (!(*flags_ny_korsning)) {
             *flags_ny_korsning = (*flags & 0x20) >> 5; 
         }
         
-        // Hinder är bit 4 (0x10)
+        // Bit 4 (0x10) är "hinder detekterat" enligt sensorkoden.
         *obstacle_detected = (*flags & 0x10) != 0;
 
         if (*flags_korsning == 1)      pickup_cmd = 'v';
@@ -266,10 +271,11 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
                 fwd[2] = cmd.target; 
                 if (!sim_motor) write(sys->i2c_styr_fd, fwd, PACKET_SIZE);
                 log_verification(fwd, cmd.action);
+                printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
             }
         } else if (cmd.state == 0x02 || cmd.state == 0x03) {
             
-            init_karta(); 
+            init_karta(); // <-- UPPDATERING: Glöm alla blockeringar vid manuell override!
             
             if (current_phase != PHASE_IDLE) {
                 printf("\n[!] MANUAL OVERRIDE DETECTED. Map reset. Canceling Auto Route.\n");
@@ -281,21 +287,12 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
                 korsning_aktiv = 0;
                 aktivt_beslut = 's';
                 nasta_beslut = 's';
-                is_handling_obstacle = false; 
+                is_handling_obstacle = false; // Glöm ifall vi stannade pga hinder
             }
             unsigned char fwd[PACKET_SIZE];
             build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
-            
-            // Sätt in target (0x00 för Hjul, 0x01 för Arm)
-            fwd[2] = cmd.target; 
-            
+            fwd[2] = cmd.target;
             if (!sim_motor) write(sys->i2c_styr_fd, fwd, PACKET_SIZE);
-            
-            if (cmd.target == 0x01) {
-                printf("-> ARM CMD: Mask/Move Byte = 0x%02X\n", (unsigned char)cmd.action);
-            } else {
-                printf("-> WHEEL CMD: '%c'\n", cmd.action);
-            }
             log_verification(fwd, cmd.action);
         }
     }
@@ -318,11 +315,12 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     // HINDERHANTERING (DELAY & OMKALKYLERING)
     // =================================================================
     if (is_handling_obstacle) {
-        if (current_time_ms() - obstacle_timer_start >= 500) { 
+        if (current_time_ms() - obstacle_timer_start >= 500) { // 0.5s pause
             is_handling_obstacle = false;
-            aktivt_beslut = 'f'; 
+            aktivt_beslut = 'f'; // Kör framåt mot nästa korsning där nya rutten börjar
             log_next_action = true;
         } else {
+            // Skicka ständigt 's' under pausen
             unsigned char stop_pkt[PACKET_SIZE];
             build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
             if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
@@ -330,56 +328,57 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         }
     }
 
-    if (obstacle_detected && !is_handling_obstacle && !is_rotating && !is_picking_up && !is_dropping) {
-        is_handling_obstacle = true;
-        obstacle_timer_start = current_time_ms();
-        
-        unsigned char stop_pkt[PACKET_SIZE];
-        build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
-        if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
+    // Hittade ett hinder? (och håller inte redan på med en annan åtgärd)
+    if (obstacle_detected && !is_handling_obstacle && !is_rotating && !is_picking_up && !is_dropping && korsning_aktiv == 0) {
+        int approaching_node = -1;
+        int *current_route = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
+        char *current_beslut = (current_phase == PHASE_TO_ITEM) ? beslut_till_vara : beslut_hem;
 
-        if (korsning_aktiv == 0) {
-            int approaching_node = -1;
-            int *current_route = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
-            char *current_beslut = (current_phase == PHASE_TO_ITEM) ? beslut_till_vara : beslut_hem;
+        if (current_action_index + 1 < NODES) {
+            approaching_node = current_route[current_action_index + 1];
+        }
 
-            if (current_action_index + 1 < NODES) {
-                approaching_node = current_route[current_action_index + 1];
+        if (approaching_node >= 0 && approaching_node < 25) {
+            int blocked_node = -1;
+            
+            // Hitta noden vi skulle åkt till EFTER approaching_node i samma riktning
+            for (int i = 0; i < 25; i++) {
+                if (vag[approaching_node][i] && nodriktningsmatris[approaching_node][i] == current_dir) {
+                    blocked_node = i;
+                    break;
+                }
             }
 
-            if (approaching_node >= 0 && approaching_node < 25) {
-                int blocked_node = -1;
+            if (blocked_node != -1) {
+                printf("\n[!] HINDER UPPTÄCKT! Tar bort väg %d <-> %d och räknar om rutt...\n", approaching_node, blocked_node);
                 
-                for (int i = 0; i < 25; i++) {
-                    if (vag[approaching_node][i] && nodriktningsmatris[approaching_node][i] == current_dir) {
-                        blocked_node = i;
-                        break;
-                    }
+                vag[approaching_node][blocked_node] = 0;
+                vag[blocked_node][approaching_node] = 0;
+
+                if (current_phase == PHASE_TO_ITEM) {
+                    planera_till_vara(approaching_node, current_dir);
+                } else if (current_phase == PHASE_TO_HOME) {
+                    int rutt_tmp[NODES];
+                    hitta_rutt(approaching_node, START, rutt_tmp, current_dir);
+                    memcpy(rutt_hem, rutt_tmp, sizeof(rutt_tmp));
+                    bygg_beslut(rutt_hem, current_dir, beslut_hem);
                 }
 
-                if (blocked_node != -1) {
-                    printf("\n[!] HINDER UPPTÄCKT! Tar bort väg %d <-> %d och räknar om rutt...\n", approaching_node, blocked_node);
-                    
-                    vag[approaching_node][blocked_node] = 0;
-                    vag[blocked_node][approaching_node] = 0;
-
-                    if (current_phase == PHASE_TO_ITEM) {
-                        planera_till_vara(approaching_node, current_dir);
-                    } else if (current_phase == PHASE_TO_HOME) {
-                        int rutt_tmp[NODES];
-                        hitta_rutt(approaching_node, START, rutt_tmp, current_dir);
-                        memcpy(rutt_hem, rutt_tmp, sizeof(rutt_tmp));
-                        bygg_beslut(rutt_hem, current_dir, beslut_hem);
-                    }
-
-                    current_action_index = -1; 
-                    aktivt_beslut = 's'; 
-                    nasta_beslut = current_beslut[0];
-                    route_changed = true; 
-                }
+                current_action_index = -1; 
+                aktivt_beslut = 's'; 
+                nasta_beslut = current_beslut[0];
+                route_changed = true; 
+                
+                is_handling_obstacle = true;
+                obstacle_timer_start = current_time_ms();
+                
+                unsigned char stop_pkt[PACKET_SIZE];
+                build_motor_packet(stop_pkt, current_auto_state, false, 's', line_var_f, line_var_b, gyro1, gyro2);
+                if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
+                
+                return; // Bryt loopen direkt för denna frame
             }
         }
-        return; 
     }
     // =================================================================
 
@@ -390,6 +389,7 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         if (!sim_motor) {
             unsigned char ack_buf[PACKET_SIZE];
             if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
+                log_styr_response(ack_buf);
                 StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
                 if (resp.valid && resp.action_done == 1) {
                     rotation_done = true;
@@ -452,7 +452,9 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                 current_action_index = 0;
                 aktivt_beslut_fn(current_action_index);
                 route_changed = true;
+                printf("\n-> Picked up item %d/%d! Next target edge: %d <-> %d\n", current_item_index, item_count, vara_u, vara_v);
             } else {
+                printf("\n-> All items collected! Returning home to node %d.\n", START);
                 current_phase = PHASE_TO_HOME;
                 current_action_index = 0;
                 aktivt_beslut_fn(current_action_index);
@@ -468,6 +470,10 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                 log_next_action = true;
             }
         }
+        return;
+    }
+
+    if (is_dropping) {
         return;
     }
 
@@ -539,7 +545,7 @@ int main() {
     SystemPointers sys;
     uint8_t line_var_f = 0, line_var_b = 0, angle = 0, gyro1 = 0, gyro2 = 0;
     uint8_t flags = 0, flags_korsning = 0, flags_ny_korsning = 0;
-    bool obstacle_detected = false; 
+    bool obstacle_detected = false; // Lades till här!
 
     init_system(&sys);
 
@@ -554,7 +560,7 @@ int main() {
         
         send_telemetry_and_routes(&sys, line_var_f, gyro1, gyro2, flags);
         
-        usleep(20000); 
+        usleep(25000); 
     }
     return 0;
 }
