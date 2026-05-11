@@ -64,8 +64,6 @@ uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
 // Sätts till 1 av styrmodul via I2C när en åtgärd är klar
-unsigned char stop_pkt[PACKET_SIZE];
-int print_timer = 20;
 
 
 
@@ -300,44 +298,43 @@ int main() {
         
         if (n > 0) {
             gui_known = true;
-        }
 
-        // --- 0x05 Command Packet ---
-        CommandPacket cmd = parse_command_packet(buffer, n);
-        if (cmd.valid) {
-            if (cmd.state == 0x00 || cmd.state == 0x01) {
-                if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
-                    start_autonomous_sequence(cmd.state);
-                } else {
+            // --- 0x05 Command Packet ---
+            CommandPacket cmd = parse_command_packet(buffer, n);
+            if (cmd.valid) {
+                if (cmd.state == 0x00 || cmd.state == 0x01) {
+                    if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
+                        start_autonomous_sequence(cmd.state);
+                    } else {
+                        unsigned char fwd[PACKET_SIZE];
+                        build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
+                        fwd[2] = cmd.target; // Behåll target-byte från GUI
+                        if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
+                        log_verification(fwd, cmd.action);
+                        printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
+                    }
+                } else if (cmd.state == 0x02 || cmd.state == 0x03) {
+                    if (current_phase != PHASE_IDLE) {
+                        printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+                        init_karta();
+                        current_phase        = PHASE_IDLE;
+                        is_rotating          = false;
+                        is_picking_up        = false;
+                        is_dropping          = false;
+                        current_action_index = 0;
+                        korsning_aktiv       = 0;
+                        aktivt_beslut        = 's';
+                        nasta_beslut         = 's';
+                    }
                     unsigned char fwd[PACKET_SIZE];
                     build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
-                    fwd[2] = cmd.target; // Behåll target-byte från GUI
+                    fwd[2] = cmd.target;
                     if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
                     log_verification(fwd, cmd.action);
                     printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
                 }
-            } else if (cmd.state == 0x02 || cmd.state == 0x03) {
-                if (current_phase != PHASE_IDLE) {
-                    printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
-                    init_karta();
-                    current_phase        = PHASE_IDLE;
-                    is_rotating          = false;
-                    is_picking_up        = false;
-                    is_dropping          = false;
-                    current_action_index = 0;
-                    korsning_aktiv       = 0;
-                    aktivt_beslut        = 's';
-                    nasta_beslut         = 's';
-                }
-                unsigned char fwd[PACKET_SIZE];
-                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
-                fwd[2] = cmd.target;
-                if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
-                log_verification(fwd, cmd.action);
-                printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
             }
         }
-
         // --- 0x07 Item List Packet ---
         ItemListPacket items = parse_item_list_packet(buffer, n);
         if (items.valid && items.count > 0) {
@@ -576,7 +573,7 @@ int main() {
                     nasta_beslut  = 's';
                     printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
 
-                    //unsigned char stop_pkt[PACKET_SIZE];
+                    unsigned char stop_pkt[PACKET_SIZE];
                     build_motor_packet(stop_pkt, current_auto_state, false,
                                        's', line_var_f, line_var_b, gyro1, gyro2);
                     if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
@@ -726,11 +723,6 @@ int main() {
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
         
-        if (print_timer == 20){
-            printf("%c ", beslut_till_vara[1]);
-            print_timer = 0;
-        }
-        print_timer++;
         usleep(25000); 
     }
 
