@@ -16,10 +16,8 @@
 #include "pathfinding.h"
 #include "protocol.h"
 
-// --- SYSTEM DEFINITIONS ---
+// --- SIM MODE DEFINITIONS ---
 #define SIM_SEGMENT_MS 1000
-#define BLIND_TIME_TURN_MS 1200     // Blindtid efter rotation så roboten hinner ur korsningen
-#define BLIND_TIME_STRAIGHT_MS 600  // Blindtid för vanliga noder för att undvika falsktrigg (bouncing)
 
 // --- STATE MACHINE ---
 typedef enum {
@@ -36,15 +34,13 @@ unsigned char current_auto_state = 1;
 bool log_next_action         = false;
 
 bool is_rotating   = false;
-char pending_rotation_cmd = ' ';
+char pending_rotation_cmd = ' '; // Sparar rot-riktning medan den stannar
 bool is_picking_up = false;
-bool pickup_stop_done = false;
-char pickup_cmd    = 'v';
+char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'h' (höger)
 bool is_dropping   = false;
+bool is_hinder = false;
 bool drop_step_done = false;
-
 long long action_timer_start = 0;
-long long ignore_intersection_until = 0; // Fix för att hindra dubbeltriggning
 uint8_t korsning_aktiv = 0;
 
 // --- SIM MODE GLOBALS ---
@@ -54,8 +50,8 @@ long long sim_segment_timer = 0;
 
 // --- TELEMETRY GLOBALS ---
 bool gui_known        = false;
-uint32_t telemetry_counter = 0;
-bool route_changed    = false;
+int telemetry_counter = 0;
+bool route_changed    = false; // Flagga: ny rutt ska skickas till GUI
 
 // --- LIVE STATE ---
 char nasta_beslut  = 's';
@@ -66,19 +62,7 @@ char current_dir = 's';
 uint8_t action_done = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
-
-// --- HINDERHANTERING ---
-bool is_handling_obstacle = false;
-long long obstacle_timer_start = 0;
-
-// --- SYSTEM POINTERS STRUCT ---
-typedef struct {
-    int sockfd;
-    int i2c_styr_fd;
-    int i2c_sens_fd;
-    struct sockaddr_in cliaddr;
-    socklen_t cliaddr_len;
-} SystemPointers;
+// Sätts till 1 av styrmodul via I2C när en åtgärd är klar
 
 // =================================================================
 // HJÄLPFUNKTION: Tidsmätning i millisekunder
@@ -89,6 +73,9 @@ long long current_time_ms() {
     return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+// =================================================================
+// LOGGNING FÖR STYRMODUL (med datum/tid)
+// =================================================================
 void log_styr_response(const unsigned char *received) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
     if (f == NULL) return;
@@ -101,40 +88,32 @@ void log_styr_response(const unsigned char *received) {
 }
 
 // =================================================================
-// Beslutshanterare
+// STATE MACHINE: Beslutsfunktion och autonom startsekvens
 // =================================================================
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
         aktivt_beslut = beslut_till_vara[index];
-        if (aktivt_beslut == 'X') {
+        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
+            nasta_beslut = 'f';
+        } else if (aktivt_beslut == 'X') {
             nasta_beslut = pickup_cmd;
         } else {
-            nasta_beslut = (index + 1 < NODES) ? beslut_till_vara[index + 1] : 's';
+            nasta_beslut = beslut_till_vara[index + 1];
         }
     } else if (current_phase == PHASE_PICKUP) {
         aktivt_beslut = pickup_cmd;
         if (current_item_index + 1 < item_count) {
             nasta_beslut = 'f';
         } else {
-            nasta_beslut = (beslut_hem[0] != '\0') ? beslut_hem[0] : 's';
+            nasta_beslut = beslut_hem[0];
         }
     } else if (current_phase == PHASE_TO_HOME) {
         aktivt_beslut = beslut_hem[index];
-        nasta_beslut = (index + 1 < NODES) ? beslut_hem[index + 1] : 's';
-    }
-}
-
-// =================================================================
-// Starta rotation eller logga
-// =================================================================
-static void maybe_start_rotation_or_log() {
-    if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
-        is_rotating = true;
-        pending_rotation_cmd = aktivt_beslut;
-        aktivt_beslut = 's';
-        action_timer_start = current_time_ms();
-    } else {
-        log_next_action = true;
+        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
+            nasta_beslut = 'f';
+        } else {
+            nasta_beslut = beslut_hem[index + 1];
+        }
     }
 }
 
@@ -147,632 +126,599 @@ void start_autonomous_sequence(unsigned char state) {
     current_item_index = 0;
     vara_u = item_list_u[0];
     vara_v = item_list_v[0];
-
+    
     printf("\n=== AUTONOMOUS ROUTE: %d item(s) to collect ===\n", item_count);
     printf("-> Item 1/%d: edge %d <-> %d\n", item_count, vara_u, vara_v);
     planera_till_vara(START, 's');
     planera_hem_fran_pickup();
-
+    
     current_auto_state   = state;
     current_phase        = PHASE_TO_ITEM;
     current_action_index = 0;
     korsning_aktiv       = 0;
     loop_counter         = 0;
-    ignore_intersection_until = current_time_ms() + BLIND_TIME_STRAIGHT_MS;
 
     aktivt_beslut_fn(current_action_index);
     current_node = rutt_till_vara[0];
     current_dir  = 's';
 
-    maybe_start_rotation_or_log();
-
-    if (sim_sensor && !is_rotating) {
+    if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
+        is_rotating = true;
+        pending_rotation_cmd = aktivt_beslut; // Spara svängen
+        aktivt_beslut = 's';                  // Skicka stop först (från stillastående)
+        action_timer_start = current_time_ms();
+    } else if (sim_sensor) {
         sim_segment_timer = current_time_ms();
     }
 
     log_next_action = true;
-    route_changed   = true;
+    route_changed  = true; // Skicka rutten till GUI
     printf("-> Route Calculated. Driving to item 1/%d...\n", item_count);
     if (sim_sensor) printf("[SIM] Intersections will be triggered every %d ms\n", SIM_SEGMENT_MS);
 }
 
-void init_system(SystemPointers *sys) {
+// =================================================================
+// HUVUDPROGRAM
+// =================================================================
+int main() {
+    int sockfd, i2c_styr_fd, i2c_sens_fd; 
+    struct sockaddr_in servaddr, cliaddr; 
+    unsigned char buffer[BUFFER_SIZE]; 
+    socklen_t len = sizeof(cliaddr); 
+
+    uint8_t line_var_f = 0;
+    uint8_t line_var_b = 0;
+    uint8_t angle    = 0;
+    uint8_t gyro1    = 0;
+    uint8_t gyro2    = 0;
+    
+    uint8_t flags             = 0;
+    uint8_t flags_korsning    = 0;
+    uint8_t flags_ny_korsning = 0;
+    uint8_t flags_ir          = 0;
+
     init_karta();
 
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
     printf("--- PI CORE: DUAL I2C (0x10 & 0x12) + UDP ROUTER ---\n");
 
-    sys->i2c_styr_fd = open(I2C_DEVICE, O_RDWR);
-    if (sys->i2c_styr_fd >= 0) {
-        ioctl(sys->i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR);
-        if (write(sys->i2c_styr_fd, NULL, 0) < 0) {
+    // --- I2C: Motorstyrning (0x12) ---
+    i2c_styr_fd = open(I2C_DEVICE, O_RDWR); 
+    if (i2c_styr_fd >= 0) { 
+        ioctl(i2c_styr_fd, I2C_SLAVE, STYRKOMM_ADDR); 
+        if (write(i2c_styr_fd, NULL, 0) < 0) { 
             sim_motor = true;
-            printf("[SIM] Motor Controller (0x12) missing. Motor writes disabled.\n");
+            printf("[SIM] Motor Controller (0x12) missing. Motor writes disabled.\n"); 
         } else {
-            printf("Connected to Motor Controller (0x12)\n");
+            printf("Connected to Motor Controller (0x12)\n"); 
         }
     } else {
         sim_motor = true;
         printf("[SIM] Could not open I2C for Motor Controller. Motor writes disabled.\n");
     }
 
-    sys->i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
-    if (sys->i2c_sens_fd >= 0) {
-        if (ioctl(sys->i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR) < 0) {
-            close(sys->i2c_sens_fd);
-            sys->i2c_sens_fd = -1;
+    // --- I2C: Sensorkort (0x10) ---
+    i2c_sens_fd = open(I2C_DEVICE, O_RDWR);
+    if (i2c_sens_fd >= 0) {
+        ioctl(i2c_sens_fd, I2C_SLAVE, SENSOR_ADDR);
+        if (write(i2c_sens_fd, NULL, 0) < 0) {
             sim_sensor = true;
-            printf("[SIM] Could not set I2C slave address for Sensor Board.\n");
-        } else if (write(sys->i2c_sens_fd, NULL, 0) < 0) {
-            sim_sensor = true;
-            printf("[SIM] Sensor Board (0x10) missing.\n");
+            printf("[SIM] Sensor Board (0x10) missing. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
         } else {
             printf("Connected to Sensor Board (0x10)\n");
         }
     } else {
         sim_sensor = true;
-        printf("[SIM] Could not open I2C for Sensor Board.\n");
+        printf("[SIM] Could not open I2C for Sensor Board. Using time-based intersection simulation (%d ms).\n", SIM_SEGMENT_MS);
     }
-
-    if ((sys->sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    int opt = 1;
-    setsockopt(sys->sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in servaddr;
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family      = AF_INET;
-    servaddr.sin_addr.s_addr = INADDR_ANY;
-    servaddr.sin_port        = htons(UDP_PORT);
-
-    if (bind(sys->sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-        perror("Bind failed");
-        exit(EXIT_FAILURE);
-    }
-
-    sys->cliaddr_len = sizeof(sys->cliaddr);
-    memset(&sys->cliaddr, 0, sizeof(sys->cliaddr));
-
-    printf("Listening for UDP on port %d...\n\n", UDP_PORT);
-}
-
-void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_b,
-                    uint8_t *angle, uint8_t *gyro1, uint8_t *gyro2,
-                    uint8_t *flags, uint8_t *flags_korsning,
-                    uint8_t *flags_ny_korsning, bool *obstacle_detected) {
-
-    unsigned char sensor_raw[PACKET_SIZE];
-    if (!sim_sensor && sys->i2c_sens_fd >= 0 &&
-        read(sys->i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) {
-
-        static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
-        if (memcmp(sensor_raw, last_sensor_packet, PACKET_SIZE) != 0) {
-            log_sensor_data(sensor_raw);
-            memcpy(last_sensor_packet, sensor_raw, PACKET_SIZE);
-        }
-
-        SensorData sd = parse_sensor_packet(sensor_raw);
-        *flags      = sd.flags;
-        *line_var_f = sd.line_var_f;
-        *line_var_b = sd.line_var_b;
-        *angle      = sd.angle;
-        *gyro1      = sd.gyro1;
-        *gyro2      = sd.gyro2;
-
-        *flags_korsning = (*flags & 0x0C) >> 2;
-
-        if (!(*flags_ny_korsning)) {
-            *flags_ny_korsning = (*flags & 0x20) >> 5;
-        }
-
-        *obstacle_detected = (*flags & 0x10) != 0;
-
-        if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
-            if (*flags_korsning == 1)      pickup_cmd = 'v';
-            else if (*flags_korsning == 3) pickup_cmd = 'h';
-        }
-    }
-}
-
-void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t line_var_b,
-                              uint8_t gyro1, uint8_t gyro2) {
-    unsigned char buffer[BUFFER_SIZE];
-    int n = recvfrom(sys->sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT,
-                     (struct sockaddr *)&sys->cliaddr, &sys->cliaddr_len);
-    if (n > 0) gui_known = true;
-
-    CommandPacket cmd = parse_command_packet(buffer, n);
-    if (cmd.valid) {
-        if (cmd.state == 0x00 || cmd.state == 0x01) {
-            if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
-                start_autonomous_sequence(cmd.state);
-            } else {
-                unsigned char fwd[PACKET_SIZE];
-                build_motor_packet(fwd, cmd.state, false, cmd.action,
-                                   line_var_f, line_var_b, gyro1, gyro2);
-                fwd[2] = cmd.target;
-                if (!sim_motor) write(sys->i2c_styr_fd, fwd, PACKET_SIZE);
-                log_verification(fwd, cmd.action);
-                printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
-            }
-        } else if (cmd.state == 0x02 || cmd.state == 0x03) {
-            init_karta();
-            item_count = 0;
-            memset(item_list_u, 0, sizeof(item_list_u));
-            memset(item_list_v, 0, sizeof(item_list_v));
-
-            if (current_phase != PHASE_IDLE) {
-                printf("\n[!] MANUAL OVERRIDE DETECTED. Map & items reset. Canceling Auto Route.\n");
-                current_phase        = PHASE_IDLE;
-                is_rotating          = false;
-                is_picking_up        = false;
-                pickup_stop_done     = false;
-                is_dropping          = false;
-                current_action_index = 0;
-                korsning_aktiv       = 0;
-                aktivt_beslut        = 's';
-                nasta_beslut         = 's';
-                is_handling_obstacle = false;
-                ignore_intersection_until = 0; // Återställ blindtimer vid manuellt överstyr
-            }
-            unsigned char fwd[PACKET_SIZE];
-            build_motor_packet(fwd, cmd.state, false, cmd.action,
-                               line_var_f, line_var_b, gyro1, gyro2);
-            fwd[2] = cmd.target;
-            if (!sim_motor) write(sys->i2c_styr_fd, fwd, PACKET_SIZE);
-            log_verification(fwd, cmd.action);
-        }
-    }
-
-    ItemListPacket item_pkt = parse_item_list_packet(buffer, n);
-    if (item_pkt.valid) {
-        item_count = item_pkt.count;
-        memcpy(item_list_u, item_pkt.items_u, item_count);
-        memcpy(item_list_v, item_pkt.items_v, item_count);
-        printf("\n-> Received new item list (%d items)\n", item_count);
-    }
-}
-
-static void start_drop_sequence(SystemPointers *sys, uint8_t line_var_f,
-                                 uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2) {
-    if (current_node != START) {
-        printf("[!] VARNING: Försöker droppa men current_node=%d, förväntat START=%d\n",
-               current_node, START);
-    }
-
-    current_phase  = PHASE_DROP;
-    is_dropping    = true;
-    drop_step_done = false;
-
-    aktivt_beslut = 'z';
-    nasta_beslut  = 'w';
-    action_timer_start = current_time_ms();
-
-    printf("\n-> Hemma vid nod %d! Stannar och skickar drop-kommando...\n", current_node);
-
-    unsigned char stop_pkt[PACKET_SIZE];
-    build_motor_packet(stop_pkt, current_auto_state, false, 'z',
-                       line_var_f, line_var_b, gyro1, gyro2);
-    if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
-    log_next_action = true;
-}
-
-void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t line_var_b,
-                               uint8_t gyro1, uint8_t gyro2, uint8_t flags_korsning,
-                               uint8_t *flags_ny_korsning, bool obstacle_detected) {
-    if (current_phase == PHASE_IDLE) return;
-
-    long long elapsed_in_state = current_time_ms() - action_timer_start;
-
-    // =================================================================
-    // HINDERHANTERING
-    // =================================================================
-    if (is_handling_obstacle) {
-        if (current_time_ms() - obstacle_timer_start >= 500) {
-            is_handling_obstacle = false;
-            aktivt_beslut = 'f';
-            log_next_action = true;
-        } else {
-            unsigned char stop_pkt[PACKET_SIZE];
-            build_motor_packet(stop_pkt, current_auto_state, false, 's',
-                               line_var_f, line_var_b, gyro1, gyro2);
-            if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
-            return;
-        }
-    }
-
-    if (obstacle_detected && !is_handling_obstacle && !is_rotating &&
-        !is_picking_up && !is_dropping && korsning_aktiv == 0) {
-
-        int approaching_node = -1;
-        int *current_route  = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
-        char *current_beslut = (current_phase == PHASE_TO_ITEM) ? beslut_till_vara : beslut_hem;
-
-        if (current_action_index + 1 < NODES) {
-            approaching_node = current_route[current_action_index + 1];
-        }
-
-        if (approaching_node >= 0 && approaching_node < NODES) {
-            int blocked_node = -1;
-            char exit_dir = ' ';
-            if (current_action_index + 2 < NODES) {
-                int node_after = current_route[current_action_index + 2];
-                if (node_after >= 0 && node_after < NODES) {
-                    exit_dir = nodriktningsmatris[approaching_node][node_after];
-                }
-            }
-
-            for (int i = 0; i < NODES; i++) {
-                if (vag[approaching_node][i]) {
-                    if (exit_dir != ' ') {
-                        if (nodriktningsmatris[approaching_node][i] == exit_dir) {
-                            blocked_node = i;
-                            break;
-                        }
-                    } else {
-                        if (nodriktningsmatris[approaching_node][i] == current_dir) {
-                            blocked_node = i;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (blocked_node != -1) {
-                printf("\n[!] HINDER UPPTÄCKT! Tar bort väg %d <-> %d och räknar om rutt...\n",
-                       approaching_node, blocked_node);
-
-                vag[approaching_node][blocked_node] = 0;
-                vag[blocked_node][approaching_node] = 0;
-
-                if (current_phase == PHASE_TO_ITEM) {
-                    planera_till_vara(approaching_node, current_dir);
-                } else if (current_phase == PHASE_TO_HOME) {
-                    int rutt_tmp[NODES];
-                    hitta_rutt(approaching_node, START, rutt_tmp, current_dir);
-                    memcpy(rutt_hem, rutt_tmp, sizeof(rutt_tmp));
-                    bygg_beslut(rutt_hem, current_dir, beslut_hem);
-                }
-
-                current_action_index = -1;
-                aktivt_beslut = 's';
-                nasta_beslut  = current_beslut[0];
-                route_changed = true;
-
-                is_handling_obstacle = true;
-                obstacle_timer_start = current_time_ms();
-
-                unsigned char stop_pkt[PACKET_SIZE];
-                build_motor_packet(stop_pkt, current_auto_state, false, 's',
-                                   line_var_f, line_var_b, gyro1, gyro2);
-                if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
-                return;
-            }
-        }
-    }
-
-    // =================================================================
-    // ROTATIONSHANTERING
-    // =================================================================
-    if (is_rotating) {
-        unsigned char rot_pkt[PACKET_SIZE];
-        build_motor_packet(rot_pkt, current_auto_state, false, pending_rotation_cmd,
-                           line_var_f, line_var_b, gyro1, gyro2);
-
-        if (!sim_motor) {
-            write(sys->i2c_styr_fd, rot_pkt, PACKET_SIZE);
-            unsigned char ack_buf[PACKET_SIZE];
-            if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
-                StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
-                if (resp.valid && resp.action_done == 1) {
-                    rotation_done = true;
-                }
-            }
-        } else {
-            if (elapsed_in_state > 2000) rotation_done = true;
-        }
-
-        if (rotation_done) {
-            is_rotating   = false;
-            rotation_done = false;
-            current_dir   = apply_turn(current_dir, pending_rotation_cmd);
-            aktivt_beslut = nasta_beslut;
-            log_next_action = true;
-            
-            // FIX: Blockerar nya korsningsdetektioner under 1.2 sekunder så att
-            // roboten faktiskt hinner köra UR korsningen den nyss svängde i!
-            ignore_intersection_until = current_time_ms() + BLIND_TIME_TURN_MS;
-        }
-        return;
-    }
-
-    // =================================================================
-    // PICKUP-HANTERING
-    // =================================================================
-    if (is_picking_up) {
-        if (!pickup_stop_done) {
-            unsigned char xstop_pkt[PACKET_SIZE];
-            build_motor_packet(xstop_pkt, current_auto_state, false, 'x',
-                               line_var_f, line_var_b, gyro1, gyro2);
-
-            if (!sim_motor) {
-                write(sys->i2c_styr_fd, xstop_pkt, PACKET_SIZE);
-                unsigned char ack_buf[PACKET_SIZE];
-                if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
-                    StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
-                    if (resp.valid && resp.action_done == 1) {
-                        pickup_stop_done = true;
-                    }
-                }
-            } else {
-                if (elapsed_in_state > 1000) pickup_stop_done = true;
-            }
-
-            if (pickup_stop_done) {
-                action_timer_start = current_time_ms();
-                printf("-> Stopp ('x') bekräftat. Påbörjar pickup ('%c')...\n", pickup_cmd);
-            }
-            return;
-        }
-
-        unsigned char pick_pkt[PACKET_SIZE];
-        build_motor_packet(pick_pkt, current_auto_state, true, pickup_cmd,
-                           line_var_f, line_var_b, gyro1, gyro2);
-
-        if (!sim_motor) {
-            write(sys->i2c_styr_fd, pick_pkt, PACKET_SIZE);
-            unsigned char ack_buf[PACKET_SIZE];
-            if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
-                StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
-                if (resp.valid && resp.action_done == 1) {
-                    pickup_step_done = true;
-                }
-            }
-        } else {
-            if (elapsed_in_state > 3000) pickup_step_done = true;
-        }
-
-        if (pickup_step_done) {
-            is_picking_up    = false;
-            pickup_step_done = false;
-            pickup_stop_done = false; 
-            current_item_index++;
-
-            if (current_item_index < item_count) {
-                vara_u = item_list_u[current_item_index];
-                vara_v = item_list_v[current_item_index];
-                planera_till_vara(current_node, current_dir);
-                planera_hem_fran_pickup();
-
-                current_phase        = PHASE_TO_ITEM;
-                current_action_index = 0;
-                aktivt_beslut_fn(current_action_index);
-                route_changed = true;
-                printf("\n-> Picked up item %d/%d! Next target edge: %d <-> %d\n",
-                       current_item_index, item_count, vara_u, vara_v);
-            } else {
-                printf("\n-> All items collected! Returning home to node %d.\n", START);
-                current_phase        = PHASE_TO_HOME;
-                current_action_index = 0;
-                aktivt_beslut_fn(current_action_index);
-                route_changed = true;
-            }
-
-            maybe_start_rotation_or_log();
-            if (sim_sensor && !is_rotating) {
-                sim_segment_timer = current_time_ms();
-            }
-            
-            // FIX: Efter pickup är klar, starta blindtid så vi kör ut säkert
-            ignore_intersection_until = current_time_ms() + BLIND_TIME_TURN_MS;
-        }
-        return;
-    }
-
-    // =================================================================
-    // DROP-HANTERING
-    // =================================================================
-    if (is_dropping) {
-        unsigned char drop_pkt[PACKET_SIZE];
-        build_motor_packet(drop_pkt, current_auto_state, true, aktivt_beslut,
-                           line_var_f, line_var_b, gyro1, gyro2);
-
-        if (!sim_motor) {
-            write(sys->i2c_styr_fd, drop_pkt, PACKET_SIZE);
-            unsigned char ack_buf[PACKET_SIZE];
-            if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
-                StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
-                if (resp.valid && resp.action_done == 1) {
-                    drop_step_done = true;
-                }
-            }
-        } else {
-            if ((aktivt_beslut == 'z' || aktivt_beslut == 's') && elapsed_in_state >= 1500) {
-                drop_step_done = true;
-            } else if (aktivt_beslut == 'w' && elapsed_in_state >= 3000) {
-                drop_step_done = true;
-            }
-        }
-
-        if (drop_step_done) {
-            if (aktivt_beslut == 'z' || aktivt_beslut == 's') {
-                aktivt_beslut  = 'w';
-                drop_step_done = false;
-                action_timer_start = current_time_ms();
-                nasta_beslut = 's';
-                log_next_action = true;
-                printf("\n-> Robot stoppad. Skickar drop-kommando ('w')...\n");
-            } else if (aktivt_beslut == 'w') {
-                is_dropping    = false;
-                drop_step_done = false;
-
-                current_phase = PHASE_IDLE;
-                current_node  = START;
-                aktivt_beslut = 's';
-                nasta_beslut  = 's';
-
-                printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n-> Varorna är lämnade och klorna öppna!\n\n");
-
-                unsigned char stop_pkt[PACKET_SIZE];
-                build_motor_packet(stop_pkt, current_auto_state, false, 's',
-                                   line_var_f, line_var_b, gyro1, gyro2);
-                if (!sim_motor) write(sys->i2c_styr_fd, stop_pkt, PACKET_SIZE);
-            }
-        }
-        return;
-    }
-
-    // =================================================================
-    // KORSNINGSLOGIK & PICKUP-DETEKTION
-    // =================================================================
-    static uint8_t prev_flags_korsning = 0;
-    bool korsning_stigning = (prev_flags_korsning == 0 && flags_korsning != 0);
-    prev_flags_korsning = flags_korsning;
-
-    bool intersection_trigger = (*flags_ny_korsning == 1) ||
-                                 korsning_stigning ||
-                                 (sim_sensor && current_time_ms() - sim_segment_timer > SIM_SEGMENT_MS);
-
-    // FIX: Töm alltid hårdvaruflaggan direkt när den inkommer så den inte "köas upp" 
-    // och skapar falsk signal precis när vår blindtid gått ut!
-    if (*flags_ny_korsning == 1) {
-        *flags_ny_korsning = 0;
-    }
-
-    // FIX: Är vi inom den säkra blindtiden? Tvinga bort alla detektioner!
-    if (current_time_ms() < ignore_intersection_until) {
-        intersection_trigger = false;
-    }
-
-    if (intersection_trigger && korsning_aktiv == 0) {
-        if (sim_sensor) sim_segment_timer = current_time_ms();
-
-        // FIX: Starta en ny blindtid för att säkra upp avfarten ur denna korsning
-        ignore_intersection_until = current_time_ms() + BLIND_TIME_STRAIGHT_MS; 
-
-        korsning_aktiv = 1;
-
-        if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
-            unsigned char xstop_pkt[PACKET_SIZE];
-            build_motor_packet(xstop_pkt, current_auto_state, false, 'x',
-                               line_var_f, line_var_b, gyro1, gyro2);
-            if (!sim_motor) write(sys->i2c_styr_fd, xstop_pkt, PACKET_SIZE);
-            log_verification(xstop_pkt, 'x');
-
-            is_picking_up = true;
-            pickup_stop_done = false; 
-            action_timer_start = current_time_ms();
-            printf("\n-> T-korsning upptäckt! Stannar med 'x' inför pickup.\n");
-        } else {
-            current_action_index++;
-
-            if (current_phase == PHASE_TO_ITEM) {
-                if (current_action_index < NODES)
-                    current_node = rutt_till_vara[current_action_index];
-            } else if (current_phase == PHASE_TO_HOME) {
-                if (current_action_index < NODES)
-                    current_node = rutt_hem[current_action_index];
-            }
-
-            aktivt_beslut_fn(current_action_index);
-
-            if (aktivt_beslut == 'b') {
-                unsigned char zstop_pkt[PACKET_SIZE];
-                build_motor_packet(zstop_pkt, current_auto_state, false, 'z',
-                                   line_var_f, line_var_b, gyro1, gyro2);
-                if (!sim_motor) write(sys->i2c_styr_fd, zstop_pkt, PACKET_SIZE);
-                log_verification(zstop_pkt, 'z');
-                log_next_action = true;
-            } else {
-                maybe_start_rotation_or_log();
-            }
-
-            if (current_phase == PHASE_TO_HOME) {
-                bool home_route_done = false;
-                if (current_action_index < NODES) {
-                    home_route_done = (current_node == START && aktivt_beslut == 's');
-                }
-                if (home_route_done) {
-                    start_drop_sequence(sys, line_var_f, line_var_b, gyro1, gyro2);
-                    return;
-                }
-            }
-        }
-    } else if (!intersection_trigger) {
-        korsning_aktiv = 0;
-    }
-
-    // =================================================================
-    // KONTINUERLIG UTSKRIFT TILL MOTOR (VAR 5:e LOOP)
-    // =================================================================
-    if (loop_counter % 5 == 0) {
-        char cmd_to_send = aktivt_beslut;
-
-        if (cmd_to_send == 'X') {
-            cmd_to_send = 'f';
-        }
-
-        unsigned char m_pkt[PACKET_SIZE];
-        build_motor_packet(m_pkt, current_auto_state, false, cmd_to_send,
-                           line_var_f, line_var_b, gyro1, gyro2);
-        if (!sim_motor) write(sys->i2c_styr_fd, m_pkt, PACKET_SIZE);
-        if (log_next_action) {
-            log_verification(m_pkt, cmd_to_send);
-            log_next_action = false;
-        }
-    }
-    loop_counter++;
-}
-
-void send_telemetry_and_routes(SystemPointers *sys, uint8_t line_var_f,
-                                uint8_t gyro1, uint8_t gyro2, uint8_t flags) {
-    if (!gui_known) return;
-
-    if (telemetry_counter++ % 25 == 0) {
-        unsigned char tpkt[PACKET_SIZE + 6];
-        build_telemetry_packet(tpkt, (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
-                               line_var_f, gyro1, gyro2, flags, current_node,
-                               current_item_index, item_count, current_dir, action_done);
-        sendto(sys->sockfd, tpkt, PACKET_SIZE + 6, 0,
-               (struct sockaddr *)&sys->cliaddr, sys->cliaddr_len);
-    }
-
-    if (route_changed) {
-        route_changed = false;
-        int *rutt = (current_phase == PHASE_TO_ITEM) ? rutt_till_vara : rutt_hem;
-        unsigned char rpkt[NODES + 3];
-        int rpkt_len = build_route_packet(rpkt, rutt, NODES);
-        sendto(sys->sockfd, rpkt, rpkt_len, 0,
-               (struct sockaddr *)&sys->cliaddr, sys->cliaddr_len);
-    }
-}
-
-int main() {
-    SystemPointers sys;
-    uint8_t line_var_f = 0, line_var_b = 0, angle = 0;
-    uint8_t gyro1 = 0, gyro2 = 0;
-    uint8_t flags = 0, flags_korsning = 0, flags_ny_korsning = 0;
-    bool obstacle_detected = false;
-
-    init_system(&sys);
 
     if (sim_sensor || sim_motor) {
         printf("\n*** RUNNING IN SIM MODE ***\n\n");
     }
 
-    while (1) {
-        update_sensors(&sys, &line_var_f, &line_var_b, &angle, &gyro1, &gyro2,
-                       &flags, &flags_korsning, &flags_ny_korsning, &obstacle_detected);
-        process_network_packets(&sys, line_var_f, line_var_b, gyro1, gyro2);
-        process_autonomous_state(&sys, line_var_f, line_var_b, gyro1, gyro2,
-                                 flags_korsning, &flags_ny_korsning, obstacle_detected);
-        send_telemetry_and_routes(&sys, line_var_f, gyro1, gyro2, flags);
-
-        usleep(25000);
+    // --- UDP Socket ---
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { 
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
     }
+    
+    int opt = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    memset(&servaddr, 0, sizeof(servaddr)); 
+    servaddr.sin_family      = AF_INET;
+    servaddr.sin_addr.s_addr = INADDR_ANY;
+    servaddr.sin_port        = htons(UDP_PORT); 
+
+    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) { 
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+    printf("Listening for UDP on port %d...\n\n", UDP_PORT);
+
+    // =============================================================
+    // NON-BLOCKING MAIN LOOP (~500 Hz)
+    // =============================================================
+    while (1) {
+        // ---------------------------------------------------------
+        // 1.a READ FROM SENSOR (0x10)
+        // ---------------------------------------------------------
+        unsigned char sensor_raw[PACKET_SIZE];
+        if (!sim_sensor && i2c_sens_fd >= 0 && read(i2c_sens_fd, sensor_raw, PACKET_SIZE) == PACKET_SIZE) { 
+            
+            static unsigned char last_sensor_packet[PACKET_SIZE] = {0};
+            if (memcmp(sensor_raw, last_sensor_packet, PACKET_SIZE) != 0) {
+                log_sensor_data(sensor_raw);
+                memcpy(last_sensor_packet, sensor_raw, PACKET_SIZE);
+            }
+            
+            SensorData sd = parse_sensor_packet(sensor_raw);
+            flags      = sd.flags;
+            line_var_f = sd.line_var_f;
+            line_var_b = sd.line_var_b;
+            angle      = sd.angle;
+            gyro1      = sd.gyro1;
+            gyro2      = sd.gyro2;
+
+            flags_korsning = (flags & 0x0C) >> 2;
+            
+            if (!flags_ny_korsning) {
+                flags_ny_korsning = (flags & 0x20) >> 4; 
+            }
+            flags_ir = (flags & 0x10) >> 3;
+            if (flags_ir == 1){
+                is_hinder = true;
+            }
+            else{
+                is_hinder = false;
+            }
+            
+            if (flags_korsning == 1)      pickup_cmd = 'v';
+            else if (flags_korsning == 3) pickup_cmd = 'h';
+        }
+
+        // ---------------------------------------------------------
+        // 1.b Read from motor (0x12)
+        // ---------------------------------------------------------
+
+
+        // ---------------------------------------------------------
+        // 2. NETWORK PACKETS
+        // ---------------------------------------------------------
+        int n = recvfrom(sockfd, buffer, BUFFER_SIZE, MSG_DONTWAIT, (struct sockaddr *)&cliaddr, &len);
+        
+        if (n > 0) {
+            gui_known = true;
+        }
+
+        // --- 0x05 Command Packet ---
+        CommandPacket cmd = parse_command_packet(buffer, n);
+        if (cmd.valid) {
+            if (cmd.state == 0x00 || cmd.state == 0x01) {
+                if (cmd.action == 'f' && current_phase == PHASE_IDLE) {
+                    start_autonomous_sequence(cmd.state);
+                } else {
+                    unsigned char fwd[PACKET_SIZE];
+                    build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
+                    fwd[2] = cmd.target; // Behåll target-byte från GUI
+                    if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
+                    log_verification(fwd, cmd.action);
+                    printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
+                }
+            } else if (cmd.state == 0x02 || cmd.state == 0x03) {
+                if (current_phase != PHASE_IDLE) {
+                    printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+                    current_phase        = PHASE_IDLE;
+                    is_rotating          = false;
+                    is_picking_up        = false;
+                    is_dropping          = false;
+                    current_action_index = 0;
+                    korsning_aktiv       = 0;
+                    aktivt_beslut        = 's';
+                    nasta_beslut         = 's';
+                }
+                unsigned char fwd[PACKET_SIZE];
+                build_motor_packet(fwd, cmd.state, false, cmd.action, line_var_f, line_var_b, gyro1, gyro2);
+                fwd[2] = cmd.target;
+                if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
+                log_verification(fwd, cmd.action);
+                printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
+            }
+        }
+
+        // --- 0x07 Item List Packet ---
+        ItemListPacket items = parse_item_list_packet(buffer, n);
+        if (items.valid && items.count > 0) {
+            item_count = items.count;
+            memcpy(item_list_u, items.items_u, items.count * sizeof(uint8_t));
+            memcpy(item_list_v, items.items_v, items.count * sizeof(uint8_t));
+            current_item_index = 0;
+            printf("[ITEMS] Received %d valid item(s) from GUI\n", item_count);
+        }
+
+        // ---------------------------------------------------------
+        // 3. AUTONOMOUS STATE MACHINE
+        // ---------------------------------------------------------
+        if (current_phase != PHASE_IDLE) { 
+            
+            long long elapsed_in_state = current_time_ms() - action_timer_start;
+
+            if (is_hinder){
+               
+                int i = current_node;
+                
+                if (current_dir == 'n'){
+                    vag[current_node - 5][current_node - 10] = 0;
+                    vag[current_node - 10][current_node - 5] = 0;
+                }
+                else if (current_dir == 'e'){
+                    vag[current_node + 1][current_node + 2] = 0;
+                    vag[current_node + 2][current_node + 1] = 0;
+                }
+                else if (current_dir == 's'){
+                    vag[current_node + 5][current_node + 10] = 0;
+                    vag[current_node + 10][current_node + 5] = 0;
+                }
+                else if (current_dir == 'w'){
+                    vag[current_node - 1][current_node - 2] = 0;
+                    vag[current_node - 2][current_node - 1] = 0;
+                }
+                current_action_index = 0;
+                
+                if(current_phase == PHASE_TO_ITEM){
+                    planera_till_vara(current_node, current_dir);
+                    aktivt_beslut = 'f';
+                    nasta_beslut = beslut_till_vara[0];
+                }
+                
+        
+               
+                is_hinder = false;
+                route_changed = true;
+                log_next_action true;
+            }
+            
+            
+            if (is_rotating) {
+                // Steg 1: Stoppa ('s' eller 'z') -> vänta på action_done -> skicka rotera ('e'/'o')
+                if (sim_motor) {
+                    rotation_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1000) ||
+                                    ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
+                } 
+                // VÄNTA minst 300ms innan vi läser I2C
+                else if (elapsed_in_state > 300 && i2c_styr_fd >= 0 && !rotation_done) {
+                    static long long last_rot_read = 0;
+                    if (current_time_ms() - last_rot_read > 50) {
+                        last_rot_read = current_time_ms();
+                        
+                        unsigned char styr_raw[PACKET_SIZE] = {0};
+                        if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                            
+                            // --- LOGGNING MED SPAM-FILTER ---
+                            static unsigned char last_styr_rot[PACKET_SIZE] = {0};
+                            if (memcmp(styr_raw, last_styr_rot, PACKET_SIZE) != 0) {
+                                log_styr_response(styr_raw);
+                                memcpy(last_styr_rot, styr_raw, PACKET_SIZE);
+                            }
+                            
+                            StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                            if (resp.action_done == 1) {
+                                rotation_done = true;
+                            }
+                        }
+                    }
+                }
+
+                // När styrmodulen är klar med sitt del-steg:
+                if (rotation_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
+                    // Stoppet är klart, nu kan vi svänga!
+                    aktivt_beslut = pending_rotation_cmd; 
+                    rotation_done = false; 
+                    action_timer_start = current_time_ms(); 
+                    log_next_action = true;
+                }
+                else if (rotation_done && (aktivt_beslut == 'e' || aktivt_beslut == 'o')) {
+                    // Svängen är klar, vi går vidare
+                    is_rotating   = false;
+                    aktivt_beslut = 'f';
+                    rotation_done = false;
+                    korsning_aktiv = 1; // Undvik att nuvarande korsning triggar igen
+                    
+                    if (current_phase == PHASE_TO_ITEM) {
+                        nasta_beslut = beslut_till_vara[current_action_index + 1];
+                    } else if (current_phase == PHASE_TO_HOME) {
+                        nasta_beslut = beslut_hem[current_action_index + 1];
+                    }
+                    log_next_action = true;
+
+                    if (sim_sensor) sim_segment_timer = current_time_ms();
+                }
+            } 
+            else if (is_picking_up) {
+                // Steg 1: Stoppa ('x') -> vänta på action_done -> skicka 'v'
+                if (sim_motor) {
+                    pickup_step_done = (aktivt_beslut == 'x' && elapsed_in_state >= 1500) ||
+                                       (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
+                } 
+                // VÄNTA minst 300ms innan vi läser I2C
+                else if (elapsed_in_state > 300 && i2c_styr_fd >= 0 && !pickup_step_done) {
+                    static long long last_pickup_read = 0;
+                    if (current_time_ms() - last_pickup_read > 50) {
+                        last_pickup_read = current_time_ms();
+                        
+                        unsigned char styr_raw[PACKET_SIZE] = {0};
+                        if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                            
+                            // --- LOGGNING MED SPAM-FILTER ---
+                            static unsigned char last_styr_pick[PACKET_SIZE] = {0};
+                            if (memcmp(styr_raw, last_styr_pick, PACKET_SIZE) != 0) {
+                                log_styr_response(styr_raw);
+                                memcpy(last_styr_pick, styr_raw, PACKET_SIZE);
+                            }
+                            
+                            StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                            if (resp.action_done == 1) {
+                                pickup_step_done = true;
+                            }
+                        }
+                    }
+                }
+
+                if (pickup_step_done && aktivt_beslut == 'x') {
+                    aktivt_beslut = pickup_cmd;
+                    pickup_step_done = false; // Nollställ för steg 2
+                    action_timer_start = current_time_ms(); // Reset timer för steg 2
+                    if (current_item_index + 1 < item_count) {
+                        nasta_beslut = 'f';
+                    } else {
+                        nasta_beslut = beslut_hem[0];
+                    }
+                    log_next_action = true;
+                }
+                // Steg 2: Pickup klar → planera nästa
+                else if (pickup_step_done && (aktivt_beslut == 'v' || aktivt_beslut == 'h')) {
+                    is_picking_up = false;
+                    current_item_index++;
+                    pickup_step_done = false;
+
+                    if (current_item_index < item_count) {
+                        vara_u = item_list_u[current_item_index];
+                        vara_v = item_list_v[current_item_index];
+                        printf("\n-> Item %d/%d: edge %d <-> %d\n",
+                               current_item_index + 1, item_count, vara_u, vara_v);
+                        planera_nasta_vara();
+                        planera_hem_fran_pickup();
+
+                        current_phase        = PHASE_TO_ITEM;
+                        current_action_index = 0;
+                        aktivt_beslut_fn(current_action_index);
+
+                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
+                            is_rotating = true;
+                            pending_rotation_cmd = aktivt_beslut;
+                            aktivt_beslut = 's'; // Skicka stop först (står redan stilla)
+                            action_timer_start = current_time_ms();
+                        } else if (sim_sensor) {
+                            sim_segment_timer = current_time_ms();
+                        }
+                        printf("-> PHASE CHANGE: Driving to item %d/%d...\n",
+                               current_item_index + 1, item_count);
+                        log_next_action = true;
+                        route_changed   = true;
+                    } else {
+                        planera_hem_fran_pickup();
+                        current_phase        = PHASE_TO_HOME;
+                        current_action_index = 0;
+                        aktivt_beslut_fn(current_action_index);
+
+                        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
+                            is_rotating = true;
+                            pending_rotation_cmd = aktivt_beslut;
+                            aktivt_beslut = 's'; // Skicka stop först (står redan stilla)
+                            action_timer_start = current_time_ms();
+                        } else if (sim_sensor) {
+                            sim_segment_timer = current_time_ms();
+                        }
+                        printf("\n-> PHASE CHANGE: All %d items collected. Heading Home...\n", item_count);
+                        log_next_action = true;
+                        route_changed   = true;
+                    }
+                }
+            }
+            // --- DROP STATE MACHINE ---
+            else if (is_dropping) {
+                // Steg 1: Stoppa ('s'/'z') → vänta på action_done → skicka 'w'
+                if (sim_motor) {
+                    drop_step_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1500) ||
+                                      (aktivt_beslut == 'w' && elapsed_in_state >= 3000);
+                }
+                else if (elapsed_in_state > 300 && i2c_styr_fd >= 0 && !drop_step_done) {
+                    static long long last_drop_read = 0;
+                    if (current_time_ms() - last_drop_read > 50) {
+                        last_drop_read = current_time_ms();
+                        unsigned char styr_raw[PACKET_SIZE] = {0};
+                        if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) == PACKET_SIZE) {
+                            StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+                            if (resp.action_done == 1) {
+                                drop_step_done = true;
+                            }
+                        }
+                    }
+                }
+
+                if (drop_step_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
+                    // Stoppet är klart, skicka drop-kommando
+                    aktivt_beslut = 'w';
+                    drop_step_done = false;
+                    action_timer_start = current_time_ms();
+                    nasta_beslut = 's';
+                    log_next_action = true;
+                }
+                else if (drop_step_done && aktivt_beslut == 'w') {
+                    // Drop klar, allt är klart
+                    is_dropping = false;
+                    drop_step_done = false;
+                    current_phase = PHASE_IDLE;
+                    current_node  = START;
+                    aktivt_beslut = 's';
+                    nasta_beslut  = 's';
+                    printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
+
+                    unsigned char stop_pkt[PACKET_SIZE];
+                    build_motor_packet(stop_pkt, current_auto_state, false,
+                                       's', line_var_f, line_var_b, gyro1, gyro2);
+                    if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+                }
+            } 
+            else {
+                // --- INTERSECTION DETECTION ---
+                bool intersection_triggered = false;
+
+                if (sim_sensor) {
+                    if (sim_segment_timer > 0 && (current_time_ms() - sim_segment_timer) >= SIM_SEGMENT_MS) {
+                        intersection_triggered = true;
+                        sim_segment_timer = 0;
+                    }
+                } else {
+                    // flags_korsning == 2: riktig korsning, triggar alltid
+                    // flags_korsning == 1 (vänster) eller 3 (höger): vara-markör, triggar bara vid upphämtning (nasta_beslut == 'X')
+                    bool real_intersection = (flags_korsning == 2);
+                    bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X');
+                    
+                    if ((real_intersection || pickup_marker) && !korsning_aktiv) {
+                        intersection_triggered = true;
+                        korsning_aktiv    = 1;
+                        flags_ny_korsning = 0;
+                    } else if (flags_korsning == 0) {
+                        korsning_aktiv = 0;
+                    }
+                }
+
+                if (intersection_triggered) {
+                    // Spara vad vi gjorde innan korsningen (t.ex. 'b' för backning)
+                    char previous_action = aktivt_beslut;
+
+                    current_action_index++;
+                    aktivt_beslut_fn(current_action_index);
+                    action_timer_start = current_time_ms();
+
+                    // Uppdatera aktuell nod och riktning
+                    if (current_phase == PHASE_TO_ITEM) {
+                        current_node = rutt_till_vara[current_action_index];
+                        if (rutt_till_vara[current_action_index + 1] != STOP) {
+                            current_dir = nodriktningsmatris[rutt_till_vara[current_action_index]][rutt_till_vara[current_action_index + 1]];
+                        }
+                    } else if (current_phase == PHASE_TO_HOME) {
+                        current_node = rutt_hem[current_action_index];
+                        if (rutt_hem[current_action_index + 1] != STOP) {
+                            current_dir = nodriktningsmatris[rutt_hem[current_action_index]][rutt_hem[current_action_index + 1]];
+                        }
+                    }
+
+                    if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
+                        is_rotating = true;
+                        pending_rotation_cmd = aktivt_beslut; // Spara svängen
+                        
+                        // Om vi just backade ('b'), skicka 'z'. Annars 's'.
+                        aktivt_beslut = (previous_action == 'b') ? 'z' : 's'; 
+                        log_next_action = true;
+                    }
+                    else if (aktivt_beslut == 'X') {
+                        if (current_phase == PHASE_TO_ITEM) {
+                            current_phase = PHASE_PICKUP;
+                            aktivt_beslut = 'x'; // Skicka 'x' när vi stannar för pickup
+                            nasta_beslut  = pickup_cmd;
+                            is_picking_up = true;
+                            printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
+                            log_next_action = true;
+                        }
+
+
+                        else if (current_phase == PHASE_TO_HOME) {
+                            current_phase = PHASE_DROP;
+                            aktivt_beslut = (previous_action == 'b') ? 'z' : 's';
+                            nasta_beslut = 'w';
+                            is_dropping = true;
+                            action_timer_start = current_time_ms();
+                            printf("\n-> Dropping basket at home...\n");
+                            log_next_action = true;
+                        }
+                    }
+                    else {
+                        log_next_action = true;
+                    }
+
+                    if (sim_sensor && !is_rotating && !is_picking_up && !is_dropping && aktivt_beslut != 'X') {
+                        sim_segment_timer = current_time_ms();
+                    }
+                }
+            }
+
+            // --- SEND MOTOR COMMANDS ---
+            if (current_phase != PHASE_IDLE && aktivt_beslut != 'X') {
+                
+                char skickat_kommando = aktivt_beslut;
+
+                bool pickup_flag = (current_phase == PHASE_PICKUP && (aktivt_beslut == 'v' || aktivt_beslut == 'h')) ||
+                                   (current_phase == PHASE_DROP && aktivt_beslut == 'w');
+                unsigned char auto_packet[PACKET_SIZE];
+                build_motor_packet(auto_packet, current_auto_state, pickup_flag,
+                                   skickat_kommando, line_var_f, line_var_b, gyro1, gyro2);
+
+                if (!sim_motor) write(i2c_styr_fd, auto_packet, PACKET_SIZE);
+                
+                if (log_next_action) {
+                    printf("Action updated to: '%c' (Sending to motors: '%c', Index: %d, Next: '%c')\n",
+                           aktivt_beslut, auto_packet[3], current_action_index, nasta_beslut);
+                    log_next_action = false;
+                }
+
+                static int blasting_log_counter = 0;
+                blasting_log_counter++;
+                if (blasting_log_counter >= 50) { 
+                    log_verification(auto_packet, auto_packet[3]);
+                    blasting_log_counter = 0;
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 4. TELEMETRY (10Hz)
+        // ---------------------------------------------------------
+        if (gui_known) {
+            telemetry_counter++;
+            if (telemetry_counter >= 50) {
+                unsigned char tpkt[PACKET_SIZE + 6];
+                build_telemetry_packet(tpkt,
+                    (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
+                    line_var_f, gyro1, gyro2, flags, current_node,
+                    (uint8_t)current_item_index, (uint8_t)item_count,
+                    current_dir, action_done);
+                sendto(sockfd, tpkt, (PACKET_SIZE + 6), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+                telemetry_counter = 0;
+            }
+        }
+        
+        // ---------------------------------------------------------
+        // 4b. SEND ROUTE UPDATE TO GUI (on route change)
+        // ---------------------------------------------------------
+        if (gui_known && route_changed) {
+            route_changed = false;
+            int *rutt = (current_phase == PHASE_TO_HOME) ? rutt_hem : rutt_till_vara;
+            unsigned char rpkt[NODES + 3];
+            int rpkt_len = build_route_packet(rpkt, rutt, NODES);
+            sendto(sockfd, rpkt, rpkt_len, 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+        }
+        
+        // ---------------------------------------------------------
+        // 5. TINY DELAY (2ms / 500Hz)
+        // ---------------------------------------------------------
+        usleep(25000); 
+    }
+
+    close(sockfd);
+    if (i2c_styr_fd >= 0) close(i2c_styr_fd);
+    if (i2c_sens_fd >= 0) close(i2c_sens_fd);
     return 0;
 }
