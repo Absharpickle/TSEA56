@@ -97,21 +97,16 @@ void log_styr_response(const unsigned char *received) {
 
 // =================================================================
 // FIX #2: Bounds-check på index+1 i aktivt_beslut_fn
+// Läs alltid nästa beslut ur arrayen för nasta_beslut,
+// även vid 'e'/'o' – så att nasta_beslut är korrekt efter rotation klar.
 // =================================================================
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
         aktivt_beslut = beslut_till_vara[index];
-        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
-            nasta_beslut = 'f';
-        } else if (aktivt_beslut == 'X') {
+        if (aktivt_beslut == 'X') {
             nasta_beslut = pickup_cmd;
         } else {
-            // FIX: bounds-check innan index+1 läses
-            if (index + 1 < NODES) {
-                nasta_beslut = beslut_till_vara[index + 1];
-            } else {
-                nasta_beslut = 's';
-            }
+            nasta_beslut = (index + 1 < NODES) ? beslut_till_vara[index + 1] : 's';
         }
     } else if (current_phase == PHASE_PICKUP) {
         aktivt_beslut = pickup_cmd;
@@ -122,16 +117,7 @@ void aktivt_beslut_fn(int index) {
         }
     } else if (current_phase == PHASE_TO_HOME) {
         aktivt_beslut = beslut_hem[index];
-        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
-            nasta_beslut = 'f';
-        } else {
-            // FIX: bounds-check innan index+1 läses
-            if (index + 1 < NODES) {
-                nasta_beslut = beslut_hem[index + 1];
-            } else {
-                nasta_beslut = 's';
-            }
-        }
+        nasta_beslut = (index + 1 < NODES) ? beslut_hem[index + 1] : 's';
     }
 }
 
