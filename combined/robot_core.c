@@ -268,6 +268,7 @@ int main() {
                 flags_ny_korsning = (flags & 0x20) >> 4; 
             }
             flags_ir = (flags & 0x10) >> 3;
+          
             if (is_hinder2 == true){
                 is_hinder = false;
             }
@@ -369,11 +370,8 @@ int main() {
                 }
                 current_action_index = 0;
                 
-                if(current_phase == PHASE_TO_ITEM){
-                    planera_till_vara(current_node, current_dir);
-                    aktivt_beslut = 'f';
-                    nasta_beslut = beslut_till_vara[0];
-                }
+                planera_till_vara(current_node, current_dir);
+                aktivt_beslut_fn(current_action_index);
                 
         
                
