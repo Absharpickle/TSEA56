@@ -352,8 +352,11 @@ int main() {
             if (is_hinder){
                 long long start_tid = current_time_ms();
                 
-              
-                if (current_dir == 'n'){
+                if (current_node == START){
+                    vag[0][5] = 0;
+                    vag[5][0] = 0;
+                }
+                else if (current_dir == 'n'){
                     vag[current_node - 5][current_node - 10] = 0;
                     vag[current_node - 10][current_node - 5] = 0;
                 }
@@ -365,10 +368,6 @@ int main() {
                     vag[current_node + 5][current_node + 10] = 0;
                     vag[current_node + 10][current_node + 5] = 0;
                 }
-                else if (current_node == START){
-                    vag[0][5] = 0;
-                    vag[5][0] = 0;
-                }
                 else if (current_dir == 'w'){
                     vag[current_node - 1][current_node - 2] = 0;
                     vag[current_node - 2][current_node - 1] = 0;
@@ -377,29 +376,19 @@ int main() {
                 
                 while(current_time_ms() - start_tid < 2000) {
                     for(int i = 0; i < NODES; i++) { 
-                        printf("%c ", beslut_till_vara[i]);
                         printf("%i ", vag[0][5]);
-                        printf("%i ", vag[5][0]);
+                        printf("%i ", current_node);
+                        printf("%c ", current_dir);
+    
                     }
-                    usleep(500000); // Pausar i 50 millisekunder
+                    usleep(1000000); // Pausar i 50 millisekunder
                 }
                 
               
                 planera_till_vara(current_node, current_dir);
                 aktivt_beslut_fn(current_action_index);
                 
-              
-              
-                while(current_time_ms() - start_tid < 2000) {
-                    for(int i = 0; i < NODES; i++) { 
-                        printf("%i ", current_node);
-                        printf("%c ", beslut_till_vara[i]);
-                        printf("%i ", vag[0][5]);
-                        printf("%i ", vag[START][0]); // Viktigt: %c för bokstäver/tecken
-                    }
-                    usleep(500000); // Pausar i 50 millisekunder
-                }
-                
+            
                 
                
                 is_hinder = false;
