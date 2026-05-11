@@ -306,9 +306,10 @@ int main() {
                         printf("-> Manual Command Forwarded: '%c'\n", cmd.action);
                     }
                 } else if (cmd.state == 0x02 || cmd.state == 0x03) {
+                    init_karta();
+                    is_hinder2 = false;
                     if (current_phase != PHASE_IDLE) {
                         printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
-                        init_karta();
                         current_phase        = PHASE_IDLE;
                         is_rotating          = false;
                         is_picking_up        = false;
@@ -719,7 +720,7 @@ int main() {
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
         flag_timer++;
-        usleep(10000);
+        usleep(100000);
     }
 
     close(sockfd);
