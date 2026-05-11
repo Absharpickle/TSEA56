@@ -508,11 +508,14 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         }
 
         if (rotation_done) {
-            is_rotating    = false;
-            rotation_done  = false;
-            current_dir    = apply_turn(current_dir, pending_rotation_cmd);
-            aktivt_beslut_fn(current_action_index);
-            maybe_start_rotation_or_log();
+            is_rotating   = false;
+            rotation_done = false;
+            current_dir   = apply_turn(current_dir, pending_rotation_cmd);
+            // Efter rotation klar: nästa beslut är redan sparat i nasta_beslut
+            // (sattes av aktivt_beslut_fn när rotationen startades).
+            // Återställ aktivt_beslut och kör vidare framåt.
+            aktivt_beslut = nasta_beslut;
+            log_next_action = true;
         }
         return;
     }
