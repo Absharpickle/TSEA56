@@ -379,21 +379,25 @@ int main() {
                     for(int i = 0; i < NODES; i++) { 
                         printf("%c ", beslut_till_vara[i]);
                         printf("%i ", vag[0][5]);
-                        printf("%i ", vag[START][0]); // Viktigt: %c för bokstäver/tecken
+                        printf("%i ", vag[5][0]);
                     }
-                    usleep(50000); // Pausar i 50 millisekunder
+                    usleep(500000); // Pausar i 50 millisekunder
                 }
                 
+              
                 planera_till_vara(current_node, current_dir);
                 aktivt_beslut_fn(current_action_index);
                 
+              
+              
                 while(current_time_ms() - start_tid < 2000) {
                     for(int i = 0; i < NODES; i++) { 
+                        printf("%i ", current_node);
                         printf("%c ", beslut_till_vara[i]);
                         printf("%i ", vag[0][5]);
                         printf("%i ", vag[START][0]); // Viktigt: %c för bokstäver/tecken
                     }
-                    usleep(50000); // Pausar i 50 millisekunder
+                    usleep(500000); // Pausar i 50 millisekunder
                 }
                 
                 
