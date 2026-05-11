@@ -18,7 +18,7 @@
 
 // --- SIM MODE DEFINITIONS ---
 #define SIM_SEGMENT_MS 1000
-#define SLEEP 1000
+#define SLEEP 10000
 
 // --- STATE MACHINE ---
 typedef enum {
