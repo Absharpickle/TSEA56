@@ -613,10 +613,15 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
 
     // =================================================================
     // KORSNINGSLOGIK
-    // FIX #4: Flaggan nollställs inuti blocket, inte i else-grenen,
-    //         för att undvika att missa korsningar om sensorn läser snabbt.
+    // Triggar på flags_ny_korsning (original) ELLER egen detektion baserad
+    // på flags_korsning: triggar på stigande flank (0 -> != 0).
     // =================================================================
+    static uint8_t prev_flags_korsning = 0;
+    bool korsning_stigning = (prev_flags_korsning == 0 && flags_korsning != 0);
+    prev_flags_korsning = flags_korsning;
+
     bool intersection_trigger = (*flags_ny_korsning == 1) ||
+                                 korsning_stigning ||
                                  (sim_sensor && current_time_ms() - sim_segment_timer > SIM_SEGMENT_MS);
 
     if (intersection_trigger && korsning_aktiv == 0) {
