@@ -18,6 +18,7 @@
 
 // --- SIM MODE DEFINITIONS ---
 #define SIM_SEGMENT_MS 1000
+#define SLEEP 100
 
 // --- STATE MACHINE ---
 typedef enum {
@@ -582,7 +583,7 @@ int main() {
                 } else {
                     // Debounce: uppdatera temp_flag bara när värdet faktiskt ändras
                     if (flags_korsning != temp_flag) {
-                        if (flag_timer > 50) {
+                        if (flag_timer > SLEEP/1000) {
                             bool real_intersection = (flags_korsning == 2);
                             bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X');
                             if (real_intersection || pickup_marker) {
@@ -720,7 +721,7 @@ int main() {
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
         flag_timer++;
-        usleep(100000);
+        usleep(SLEEP);
     }
 
     close(sockfd);
