@@ -374,25 +374,20 @@ int main() {
                 }
                 current_action_index = 0;
                 
-                while(current_time_ms() - start_tid < 2000) {
-                    for(int i = 0; i < NODES; i++) { 
-                        printf("%c ", beslut_till_vara[i]);
-                      
-                    }
-                    usleep(1000000); // Pausar i 50 millisekunder
+
+                for(int i = 0; i < NODES; i++) { 
+                    printf("%c ", beslut_till_vara[i]);
                 }
+            
               
                 planera_till_vara(current_node, current_dir);
                 aktivt_beslut_fn(current_action_index);
                 
-                while(current_time_ms() - start_tid < 2000) {
-                    for(int i = 0; i < NODES; i++) { 
-                        printf("%c ", beslut_till_vara[i]);
-                      
-                    }
-                    usleep(1000000); // Pausar i 50 millisekunder
-                }
             
+                for(int i = 0; i < NODES; i++) { 
+                     printf("%c ", beslut_till_vara[i]);
+                }
+               
                 
                
                 is_hinder = false;
@@ -735,6 +730,7 @@ int main() {
         // ---------------------------------------------------------
         // 5. TINY DELAY (2ms / 500Hz)
         // ---------------------------------------------------------
+        printf(aktivt_beslut);
         usleep(25000); 
     }
 
