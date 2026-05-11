@@ -16,8 +16,10 @@
 #include "pathfinding.h"
 #include "protocol.h"
 
-// --- SIM MODE DEFINITIONS ---
+// --- SYSTEM DEFINITIONS ---
 #define SIM_SEGMENT_MS 1000
+#define BLIND_TIME_TURN_MS 1200     // Blindtid efter rotation så roboten hinner ur korsningen
+#define BLIND_TIME_STRAIGHT_MS 600  // Blindtid för vanliga noder för att undvika falsktrigg (bouncing)
 
 // --- STATE MACHINE ---
 typedef enum {
@@ -36,11 +38,13 @@ bool log_next_action         = false;
 bool is_rotating   = false;
 char pending_rotation_cmd = ' ';
 bool is_picking_up = false;
-bool pickup_stop_done = false; // För att skicka 'x' innan 'v'/'h'
+bool pickup_stop_done = false;
 char pickup_cmd    = 'v';
 bool is_dropping   = false;
 bool drop_step_done = false;
+
 long long action_timer_start = 0;
+long long ignore_intersection_until = 0; // Fix för att hindra dubbeltriggning
 uint8_t korsning_aktiv = 0;
 
 // --- SIM MODE GLOBALS ---
@@ -154,6 +158,7 @@ void start_autonomous_sequence(unsigned char state) {
     current_action_index = 0;
     korsning_aktiv       = 0;
     loop_counter         = 0;
+    ignore_intersection_until = current_time_ms() + BLIND_TIME_STRAIGHT_MS;
 
     aktivt_beslut_fn(current_action_index);
     current_node = rutt_till_vara[0];
@@ -266,7 +271,6 @@ void update_sensors(SystemPointers *sys, uint8_t *line_var_f, uint8_t *line_var_
 
         *obstacle_detected = (*flags & 0x10) != 0;
 
-        // Om vi är på väg mot pickup och har stött på trevägskorsningen
         if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
             if (*flags_korsning == 1)      pickup_cmd = 'v';
             else if (*flags_korsning == 3) pickup_cmd = 'h';
@@ -313,6 +317,7 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
                 aktivt_beslut        = 's';
                 nasta_beslut         = 's';
                 is_handling_obstacle = false;
+                ignore_intersection_until = 0; // Återställ blindtimer vid manuellt överstyr
             }
             unsigned char fwd[PACKET_SIZE];
             build_motor_packet(fwd, cmd.state, false, cmd.action,
@@ -332,9 +337,6 @@ void process_network_packets(SystemPointers *sys, uint8_t line_var_f, uint8_t li
     }
 }
 
-// =================================================================
-// Droppsekvens
-// =================================================================
 static void start_drop_sequence(SystemPointers *sys, uint8_t line_var_f,
                                  uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2) {
     if (current_node != START) {
@@ -465,7 +467,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             write(sys->i2c_styr_fd, rot_pkt, PACKET_SIZE);
             unsigned char ack_buf[PACKET_SIZE];
             if (read(sys->i2c_styr_fd, ack_buf, PACKET_SIZE) == PACKET_SIZE) {
-                log_styr_response(ack_buf);
                 StyrResponse resp = parse_styr_response(ack_buf, PACKET_SIZE);
                 if (resp.valid && resp.action_done == 1) {
                     rotation_done = true;
@@ -481,6 +482,10 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             current_dir   = apply_turn(current_dir, pending_rotation_cmd);
             aktivt_beslut = nasta_beslut;
             log_next_action = true;
+            
+            // FIX: Blockerar nya korsningsdetektioner under 1.2 sekunder så att
+            // roboten faktiskt hinner köra UR korsningen den nyss svängde i!
+            ignore_intersection_until = current_time_ms() + BLIND_TIME_TURN_MS;
         }
         return;
     }
@@ -489,7 +494,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     // PICKUP-HANTERING
     // =================================================================
     if (is_picking_up) {
-        // Steg 1: Skicka "lilla x" och vänta på bekräftelse (robothalt)
         if (!pickup_stop_done) {
             unsigned char xstop_pkt[PACKET_SIZE];
             build_motor_packet(xstop_pkt, current_auto_state, false, 'x',
@@ -509,13 +513,12 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             }
 
             if (pickup_stop_done) {
-                action_timer_start = current_time_ms(); // Återställ inför steg 2
+                action_timer_start = current_time_ms();
                 printf("-> Stopp ('x') bekräftat. Påbörjar pickup ('%c')...\n", pickup_cmd);
             }
             return;
         }
 
-        // Steg 2: Själva upphämtningen med v eller h
         unsigned char pick_pkt[PACKET_SIZE];
         build_motor_packet(pick_pkt, current_auto_state, true, pickup_cmd,
                            line_var_f, line_var_b, gyro1, gyro2);
@@ -536,7 +539,7 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
         if (pickup_step_done) {
             is_picking_up    = false;
             pickup_step_done = false;
-            pickup_stop_done = false; // Återställning inför nästa gång
+            pickup_stop_done = false; 
             current_item_index++;
 
             if (current_item_index < item_count) {
@@ -563,6 +566,9 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             if (sim_sensor && !is_rotating) {
                 sim_segment_timer = current_time_ms();
             }
+            
+            // FIX: Efter pickup är klar, starta blindtid så vi kör ut säkert
+            ignore_intersection_until = current_time_ms() + BLIND_TIME_TURN_MS;
         }
         return;
     }
@@ -631,16 +637,26 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                                  korsning_stigning ||
                                  (sim_sensor && current_time_ms() - sim_segment_timer > SIM_SEGMENT_MS);
 
-    if (intersection_trigger && korsning_aktiv == 0) {
-        // Konsumera flaggan omedelbart
+    // FIX: Töm alltid hårdvaruflaggan direkt när den inkommer så den inte "köas upp" 
+    // och skapar falsk signal precis när vår blindtid gått ut!
+    if (*flags_ny_korsning == 1) {
         *flags_ny_korsning = 0;
+    }
+
+    // FIX: Är vi inom den säkra blindtiden? Tvinga bort alla detektioner!
+    if (current_time_ms() < ignore_intersection_until) {
+        intersection_trigger = false;
+    }
+
+    if (intersection_trigger && korsning_aktiv == 0) {
         if (sim_sensor) sim_segment_timer = current_time_ms();
+
+        // FIX: Starta en ny blindtid för att säkra upp avfarten ur denna korsning
+        ignore_intersection_until = current_time_ms() + BLIND_TIME_STRAIGHT_MS; 
 
         korsning_aktiv = 1;
 
         if (current_phase == PHASE_TO_ITEM && aktivt_beslut == 'X') {
-            // VI HAR NÅTT TREVÄGSKORSNINGEN (UPPHÄMTNINGSPLATSEN)
-            // Vi sparar inte en ny nod här, eftersom vi stannar på sträckan!
             unsigned char xstop_pkt[PACKET_SIZE];
             build_motor_packet(xstop_pkt, current_auto_state, false, 'x',
                                line_var_f, line_var_b, gyro1, gyro2);
@@ -648,11 +664,10 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
             log_verification(xstop_pkt, 'x');
 
             is_picking_up = true;
-            pickup_stop_done = false; // Sätt till false för att börja med stopp-sekvensen
+            pickup_stop_done = false; 
             action_timer_start = current_time_ms();
             printf("\n-> T-korsning upptäckt! Stannar med 'x' inför pickup.\n");
         } else {
-            // VANLIG NOD - Fortsätt iterera framåt i rutten
             current_action_index++;
 
             if (current_phase == PHASE_TO_ITEM) {
@@ -673,11 +688,9 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
                 log_verification(zstop_pkt, 'z');
                 log_next_action = true;
             } else {
-                // Skickar in eventuella svängar (inte 'X') till motorn
                 maybe_start_rotation_or_log();
             }
 
-            // Kolla om hemrutten är slut
             if (current_phase == PHASE_TO_HOME) {
                 bool home_route_done = false;
                 if (current_action_index < NODES) {
@@ -699,8 +712,6 @@ void process_autonomous_state(SystemPointers *sys, uint8_t line_var_f, uint8_t l
     if (loop_counter % 5 == 0) {
         char cmd_to_send = aktivt_beslut;
 
-        // Om vi aktivt letar efter en upphämtningsplats vill vi skicka 'f'
-        // till motorerna så att roboten rör sig framåt längs sträckan.
         if (cmd_to_send == 'X') {
             cmd_to_send = 'f';
         }
