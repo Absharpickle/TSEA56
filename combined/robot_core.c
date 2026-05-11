@@ -267,7 +267,7 @@ int main() {
             if (!flags_ny_korsning) {
                 flags_ny_korsning = (flags & 0x20) >> 4; 
             }
-            flags_ir = (flags & 0x10) >> 3;
+            flags_ir = (flags & 0x10) >> 4;
           
             if (is_hinder2 == true){
                 is_hinder = false;
