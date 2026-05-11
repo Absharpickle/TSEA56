@@ -366,8 +366,8 @@ int main() {
                     vag[current_node + 10][current_node + 5] = 0;
                 }
                 else if (current_node == START){
-                    vag[0][5] == 0;
-                    vag[5][0] == 0;
+                    vag[0][5] = 0;
+                    vag[5][0] = 0;
                 }
                 else if (current_dir == 'w'){
                     vag[current_node - 1][current_node - 2] = 0;
