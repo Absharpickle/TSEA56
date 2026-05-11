@@ -60,6 +60,25 @@ char get_turn(char nu, char nasta) {
     return 'f'; // Ska aldrig nås — Dijkstra undviker 180° svängar
 }
 
+// Applicera ett svängkommando ('e'=höger, 'o'=vänster, 'f'=rakt) på en kompassriktning.
+// Returnerar den nya kompassriktningen efter svängen.
+char apply_turn(char dir, char turn_cmd) {
+    if (turn_cmd == 'f') return dir;
+    if (turn_cmd == 'e') { // Sväng höger
+        if (dir == 'n') return 'e';
+        if (dir == 'e') return 's';
+        if (dir == 's') return 'w';
+        if (dir == 'w') return 'n';
+    }
+    if (turn_cmd == 'o') { // Sväng vänster
+        if (dir == 'n') return 'w';
+        if (dir == 'w') return 's';
+        if (dir == 's') return 'e';
+        if (dir == 'e') return 'n';
+    }
+    return dir; // Okänt kommando – behåll riktning
+}
+
 char get_motsatt_dir(char nu) {
     if (nu == 's') return 'n';
     if (nu == 'n') return 's';

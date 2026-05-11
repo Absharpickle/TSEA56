@@ -33,6 +33,7 @@ extern char dir_vid_vara;
 // --- FUNCTIONS ---
 void init_karta();
 char get_turn(char nu, char nasta);
+char apply_turn(char dir, char turn_cmd);
 char get_motsatt_dir(char nu);
 void bygg_beslut(int rutt[], char start_dir, char beslut[]);
 int  hitta_rutt(int start, int mal, int rutt[], char start_dir);
