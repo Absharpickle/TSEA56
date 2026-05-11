@@ -373,7 +373,9 @@ int main() {
                 
                 while(current_time_ms() - start_tid < 2000) {
                     for(int i = 0; i < NODES; i++) { 
-                        printf("%c ", beslut_till_vara[i]); // Viktigt: %c för bokstäver/tecken
+                        printf("%c ", beslut_till_vara[i]);
+                        printf("%i ", vag[0][5]);
+                        printf("%i ", vag[START][0]); // Viktigt: %c för bokstäver/tecken
                     }
                     usleep(50000); // Pausar i 50 millisekunder
                 }
@@ -383,7 +385,9 @@ int main() {
                 
                 while(current_time_ms() - start_tid < 2000) {
                     for(int i = 0; i < NODES; i++) { 
-                        printf("%c ", beslut_till_vara[i]); // Viktigt: %c för bokstäver/tecken
+                        printf("%c ", beslut_till_vara[i]);
+                        printf("%i ", vag[0][5]);
+                        printf("%i ", vag[START][0]); // Viktigt: %c för bokstäver/tecken
                     }
                     usleep(50000); // Pausar i 50 millisekunder
                 }
