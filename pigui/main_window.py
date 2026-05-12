@@ -1,10 +1,11 @@
 import cv2
 import socket
+import time
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QComboBox, QFrame, QGridLayout,
                              QSizePolicy, QPushButton, QListWidget)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 
 from threads import VideoThread, TelemetryThread
 from map_widget import MapFrame
@@ -13,6 +14,81 @@ from protocol import build_command_packet, build_item_list_packet
 IP_ADDRESS_HOME = "192.168.1.50"
 IP_ADDRESS_SITE = "10.42.0.1"
 
+
+
+class TelemetryPlotWidget(QFrame):
+    """Simple line plot for recent line_var telemetry samples."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(180)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("background-color: #1b2631; border: 2px solid #34495e; border-radius: 5px;")
+        self.samples = []
+        self.timestamps = []
+        self.max_samples = 100
+
+    def add_sample(self, value):
+        now = time.time()
+        self.timestamps.append(now)
+        self.samples.append(value)
+        if len(self.samples) > self.max_samples:
+            self.samples.pop(0)
+            self.timestamps.pop(0)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.contentsRect()
+        painter.fillRect(rect, QColor("#1b2631"))
+
+        margin = 10
+        plot_rect = rect.adjusted(margin, margin + 12, -margin, -margin)
+
+        painter.setPen(QPen(QColor("#7f8c8d"), 1))
+        painter.drawRect(plot_rect)
+        painter.setFont(QFont("Segoe UI", 9))
+        painter.setPen(QColor("#ecf0f1"))
+        painter.drawText(rect.left() + margin, rect.top() + 12, "line_var_f over time")
+
+        if len(self.samples) < 2:
+            painter.setPen(QColor("#95a5a6"))
+            painter.drawText(plot_rect, Qt.AlignmentFlag.AlignCenter, "Waiting for telemetry...")
+            return
+
+        x0 = plot_rect.left()
+        y0 = plot_rect.top()
+        width = plot_rect.width()
+        height = plot_rect.height()
+
+        t_start = self.timestamps[0]
+        t_end = self.timestamps[-1]
+        t_span = max(0.1, t_end - t_start)
+        min_val = 0
+        max_val = 255
+
+        painter.setPen(QPen(QColor("#34495e"), 1))
+        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+            y = y0 + int(height * frac)
+            painter.drawLine(x0, y, x0 + width, y)
+
+        points = []
+        for t, value in zip(self.timestamps, self.samples):
+            x = x0 + int((t - t_start) / t_span * width)
+            y = y0 + height - int((value - min_val) / (max_val - min_val) * height)
+            points.append((x, y))
+
+        painter.setPen(QPen(QColor("#2ecc71"), 2))
+        for i in range(len(points) - 1):
+            painter.drawLine(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
+
+        painter.setFont(QFont("Segoe UI", 8))
+        painter.setPen(QColor("#bdc3c7"))
+        painter.drawText(x0 + 2, y0 + 10, f"{max_val}")
+        painter.drawText(x0 + 2, y0 + height - 2, f"{min_val}")
+        painter.drawText(x0 + width - 60, y0 + height + 12, f"{round(t_end - t_start, 1)}s")
 
 
 class MainWindow(QMainWindow):
@@ -64,6 +140,7 @@ class MainWindow(QMainWindow):
 
         self._setup_controls()
         self._setup_dashboard()
+        self._setup_line_plot()
         self._start_threads()
 
         self.phase_names = {0: "IDLE", 1: "TO ITEM", 2: "PICKUP", 3: "TO HOME", 4: "DROP"}
@@ -238,6 +315,10 @@ class MainWindow(QMainWindow):
 
         self.layout.addWidget(self.dashboard_frame)
 
+    def _setup_line_plot(self):
+        self.line_plot_widget = TelemetryPlotWidget()
+        self.layout.addWidget(self.line_plot_widget)
+
     def _start_threads(self):
         """Start the video and telemetry background threads."""
         self.video_thread = VideoThread()
@@ -320,6 +401,8 @@ class MainWindow(QMainWindow):
             self.lbl_items_progress.setText(f"Items: {min(item_idx+1, item_total)}/{item_total}")
         else:
             self.lbl_items_progress.setText("Items: -")
+
+        self.line_plot_widget.add_sample(data['line_var'])
 
         # Clear route display when robot goes idle
         if data['phase'] == 0 and self.map_frame.route_nodes:
