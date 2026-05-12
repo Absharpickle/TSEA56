@@ -38,7 +38,7 @@ char get_motsatt_dir(char nu);
 void bygg_beslut(int rutt[], char start_dir, char beslut[]);
 int  hitta_rutt(int start, int mal, int rutt[], char start_dir);
 void planera_till_vara(int from_node, char from_dir);
-void planera_hem_fran_pickup();
-void planera_nasta_vara();
+void planera_hem_fran_pickup(int from_node, char from_dir);
+void planera_nasta_vara(int from_node1, char from_dir1);
 
 #endif // PATHFINDING_H

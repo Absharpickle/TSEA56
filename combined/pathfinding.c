@@ -181,13 +181,31 @@ void planera_till_vara(int from_node, char from_dir) {
     dir_vid_vara = nodriktningsmatris[pickup_ingang][pickup_utgang];
 }
 
-void planera_hem_fran_pickup() {
+void planera_hem_fran_pickup(int from_node, char from_dir) {
     int rutt_alt1[NODES], rutt_alt2[NODES];
+    int cost_fwd;
+    int cost_back;
+    int from_node2;
 
-    int cost_fwd  = hitta_rutt(pickup_utgang, START, rutt_alt1, dir_vid_vara);
-    // Vid backup: roboten backar till pickup_ingang men tittar fortfarande åt dir_vid_vara
-    int cost_back = hitta_rutt(pickup_ingang, START, rutt_alt2, dir_vid_vara) + 100;
-
+    if (from_node == 99){
+        cost_fwd  = hitta_rutt(pickup_utgang, START, rutt_alt1, dir_vid_vara);
+        cost_back = hitta_rutt(pickup_ingang, START, rutt_alt2, dir_vid_vara) + 100;
+    }else{
+        if (from_node == START) {
+            from_node2 = 0;
+        }else if (from_dir == 'n') {
+            from_node2 = from_node - 5;
+        }else if (from_dir == 'e') {
+            from_node2 = from_node + 1;
+        }else if (from_dir == 's') {
+            from_node2 = from_node + 5;
+        }else if (from_dir == 'w') {
+            from_node2 = from_node - 1;
+        }
+        cost_fwd  = hitta_rutt(from_node2, START, rutt_alt1, from_dir);
+        cost_back = 9999;
+    }
+    
     if (cost_fwd <= cost_back) {
         memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
         bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
@@ -209,15 +227,32 @@ void planera_hem_fran_pickup() {
     }
 }
 
-void planera_nasta_vara() {
+void planera_nasta_vara(int from_node1, char from_dir1) {
     int rutt_tmp[NODES];
-
     int costs[4];
+    int from_node2;
     costs[0] = hitta_rutt(pickup_utgang, vara_u, rutt_tmp, dir_vid_vara);
     costs[1] = hitta_rutt(pickup_utgang, vara_v, rutt_tmp, dir_vid_vara);
-    // Vid backup: roboten tittar fortfarande åt dir_vid_vara från pickup_ingang
     costs[2] = hitta_rutt(pickup_ingang, vara_u, rutt_tmp, dir_vid_vara) + 100;
     costs[3] = hitta_rutt(pickup_ingang, vara_v, rutt_tmp, dir_vid_vara) + 100;
+
+    if(from_node1 != 99){
+        if (from_node1 == START) {
+            from_node2 = 0;
+        }else if (from_dir1 == 'n') {
+            from_node2 = from_node1 - 5;
+        }else if (from_dir1 == 'e') {
+            from_node2 = from_node1 + 1;
+        }else if (from_dir1 == 's') {
+            from_node2 = from_node1 + 5;
+        }else if (from_dir1 == 'w') {
+            from_node2 = from_node1 - 1;
+        }
+        costs[0] = hitta_rutt(from_node2, vara_u, rutt_tmp, from_dir1);
+        costs[1] = hitta_rutt(from_node2, vara_v, rutt_tmp, from_dir1);   
+        costs[2] = 9999;
+        costs[3] = 9999;
+    }
 
     int best = 0;
     for (int i = 1; i < 4; i++) { if (costs[i] < costs[best]) best = i; }
@@ -228,6 +263,11 @@ void planera_nasta_vara() {
     int approach  = (best % 2 == 0) ? vara_u : vara_v;
     int through   = (approach == vara_u) ? vara_v : vara_u;
 
+    if(from_node1 != 99){
+        from_node = from_node2;
+        from_dir = from_dir1;
+    }
+    
     hitta_rutt(from_node, approach, rutt_till_vara, from_dir);
     int i = 0;
     while (rutt_till_vara[i] != STOP) i++;

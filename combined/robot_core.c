@@ -179,7 +179,7 @@ void start_autonomous_sequence(unsigned char state) {
     printf("\n=== AUTONOMOUS ROUTE: %d item(s) to collect ===\n", item_count);
     printf("-> Item 1/%d: edge %d <-> %d\n", item_count, vara_u, vara_v);
     planera_till_vara(START, 's');
-    planera_hem_fran_pickup();
+    planera_hem_fran_pickup(99, 'a');
 
     current_auto_state   = state;
     current_phase        = PHASE_TO_ITEM;
@@ -414,10 +414,17 @@ int main() {
                 }
                 current_action_index = 0;
 
-                planera_till_vara(current_node, current_dir);
-                aktivt_beslut_fn(current_action_index);
-
-                
+                if (current_phase == PHASE_TO_ITEM && current_item_index == 0){
+                    planera_till_vara(current_node, current_dir);
+                    aktivt_beslut_fn(current_action_index); 
+                }else if (current_phase == PHASE_TO_ITEM && current_item_index > 0){
+                    planera_nasta_vara(current_node, current_dir);
+                    aktivt_beslut_fn(current_action_index); 
+                }else if (current_phase == PHASE_TO_HOME){
+                    planera_hem_fran_pickup(current_node, current_dir);
+                    aktivt_beslut_fn(current_action_index); 
+                }
+               
                 is_hinder = false;
                 is_hinder2 = true;
                 route_changed = true;
@@ -535,8 +542,8 @@ int main() {
                         vara_v = item_list_v[current_item_index];
                         printf("\n-> Item %d/%d: edge %d <-> %d\n",
                                current_item_index + 1, item_count, vara_u, vara_v);
-                        planera_nasta_vara();
-                        planera_hem_fran_pickup();
+                        planera_nasta_vara(99, 'a');
+                        planera_hem_fran_pickup(99, 'a');
 
                         current_phase        = PHASE_TO_ITEM;
                         current_action_index = 0;
@@ -555,7 +562,7 @@ int main() {
                         log_next_action = true;
                         route_changed   = true;
                     } else {
-                        planera_hem_fran_pickup();
+                        planera_hem_fran_pickup(99, 'a');
                         current_phase        = PHASE_TO_HOME;
                         current_action_index = 0;
                         aktivt_beslut_fn(current_action_index);
