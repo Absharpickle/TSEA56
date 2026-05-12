@@ -185,7 +185,7 @@ void planera_hem_fran_pickup(int from_node, char from_dir) {
     int rutt_alt1[NODES], rutt_alt2[NODES];
     int cost_fwd;
     int cost_back;
-    int from_node2;
+    int from_node2 = 99;
 
     if (from_node == 99){
         cost_fwd  = hitta_rutt(pickup_utgang, START, rutt_alt1, dir_vid_vara);
@@ -230,7 +230,7 @@ void planera_hem_fran_pickup(int from_node, char from_dir) {
 void planera_nasta_vara(int from_node1, char from_dir1) {
     int rutt_tmp[NODES];
     int costs[4];
-    int from_node2;
+    int from_node2 = 99;
     costs[0] = hitta_rutt(pickup_utgang, vara_u, rutt_tmp, dir_vid_vara);
     costs[1] = hitta_rutt(pickup_utgang, vara_v, rutt_tmp, dir_vid_vara);
     costs[2] = hitta_rutt(pickup_ingang, vara_u, rutt_tmp, dir_vid_vara) + 100;
