@@ -466,14 +466,25 @@ static void handle_obstacle(void) {
 // =================================================================
 // I2C "ACTION DONE" POLLER (delas av rotation / pickup / drop)
 // =================================================================
-// Checks the latched action_done global (set by read_styr).
-// Returns true once action_done is detected after the 300ms grace period.
+// Returnerar true om styrmodulen rapporterar att åtgärden är klar.
 static bool poll_action_done(long long elapsed_in_state, bool *done_flag) {
     if (*done_flag) return true;
-    if (sim_motor || elapsed_in_state <= 300) return false;
+    if (sim_motor || elapsed_in_state <= 300 || i2c_styr_fd < 0) return false;
 
-    if (action_done == 1) {
-        action_done = 0;  // Consume the latch
+    static long long last_read_ms = 0;
+    if (current_time_ms() - last_read_ms <= 50) return false;
+    last_read_ms = current_time_ms();
+
+    unsigned char styr_raw[PACKET_SIZE] = {0};
+    if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) != PACKET_SIZE) return false;
+
+    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+    styr_gas_right = resp.gas_right;
+    styr_gas_left  = resp.gas_left;
+    styr_claw_r    = resp.claw_pos_r;
+    styr_claw_z    = resp.claw_pos_z;
+    action_done    = resp.action_done;
+    if (resp.action_done == 1) {
         *done_flag = true;
         return true;
     }
@@ -818,7 +829,7 @@ int main() {
     // =============================================================
     while (1) {
         read_sensors();
-        read_styr();
+        // read_styr();  // Disabled: slave firmware doesn't handle SLA+R yet, breaks I2C bus
         handle_network_packets();
         run_autonomous_tick();
         send_telemetry();
