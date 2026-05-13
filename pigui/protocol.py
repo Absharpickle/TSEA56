@@ -11,6 +11,19 @@ def build_command_packet(state, target, action_char):
                        0x00, 0x00, 0x00, 0xFF)
 
 
+def build_arm_command_packet(state, joint, direction):
+    """Build a 0x05 arm command packet.
+
+    joint: 1-6 (which joint to move)
+    direction: 0=stop, 1=increase, 2=decrease
+    Action byte: bits 0-5 = one-hot joint, bits 6-7 = direction
+    """
+    action_byte = (1 << (joint - 1)) | (direction << 6)
+    return struct.pack('BBBBBBBB',
+                       0x05, state, 0x01, action_byte,
+                       0x00, 0x00, 0x00, 0xFF)
+
+
 def build_item_list_packet(item_edges):
     """Build a variable-length 0x07 item-list packet.
     

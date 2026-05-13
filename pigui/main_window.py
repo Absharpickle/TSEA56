@@ -8,7 +8,7 @@ from PyQt6.QtGui import QImage, QPixmap
 
 from threads import VideoThread, TelemetryThread
 from map_widget import MapFrame
-from protocol import build_command_packet, build_item_list_packet
+from protocol import build_command_packet, build_item_list_packet, build_arm_command_packet
 
 IP_ADDRESS_HOME = "192.168.1.50"
 IP_ADDRESS_SITE = "10.42.0.1"
@@ -25,6 +25,7 @@ class MainWindow(QMainWindow):
         """)
         
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.current_joint = 1  # Active arm joint (1-6)
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -361,21 +362,37 @@ class MainWindow(QMainWindow):
     # =================================================================
     def keyPressEvent(self, event):
         key = event.key()
-
-        # State hotkeys
-        if key == Qt.Key.Key_1: self.state_combo.setCurrentIndex(0); return
-        elif key == Qt.Key.Key_2: self.state_combo.setCurrentIndex(1); return
-        elif key == Qt.Key.Key_3: self.state_combo.setCurrentIndex(2); return
-        elif key == Qt.Key.Key_4: self.state_combo.setCurrentIndex(3); return
-
-        # Target hotkeys
-        elif key == Qt.Key.Key_T: self.target_combo.setCurrentIndex(0); return
-        elif key == Qt.Key.Key_A: self.target_combo.setCurrentIndex(1); return
-
-        # Action keys
-        action_char = None
         target = self.target_combo.currentData()
 
+        # When target is arm, keys 1-6 select joint
+        if target == "arm":
+            joint_keys = {
+                Qt.Key.Key_1: 1, Qt.Key.Key_2: 2, Qt.Key.Key_3: 3,
+                Qt.Key.Key_4: 4, Qt.Key.Key_5: 5, Qt.Key.Key_6: 6,
+            }
+            if key in joint_keys:
+                self.current_joint = joint_keys[key]
+                print(f"[ARM] Joint {self.current_joint} selected")
+                return
+            if key == Qt.Key.Key_Up:
+                self.send_arm_packet(1)  # increase
+                return
+            elif key == Qt.Key.Key_Down:
+                self.send_arm_packet(2)  # decrease
+                return
+        else:
+            # State hotkeys (wheel mode only)
+            if key == Qt.Key.Key_1: self.state_combo.setCurrentIndex(0); return
+            elif key == Qt.Key.Key_2: self.state_combo.setCurrentIndex(1); return
+            elif key == Qt.Key.Key_3: self.state_combo.setCurrentIndex(2); return
+            elif key == Qt.Key.Key_4: self.state_combo.setCurrentIndex(3); return
+
+        # Target hotkeys
+        if key == Qt.Key.Key_T: self.target_combo.setCurrentIndex(0); return
+        elif key == Qt.Key.Key_A: self.target_combo.setCurrentIndex(1); return
+
+        # Wheel action keys
+        action_char = None
         if target == "wheel":
             key_map = {
                 Qt.Key.Key_Up: 'f', Qt.Key.Key_Down: 'b',
@@ -384,12 +401,18 @@ class MainWindow(QMainWindow):
                 Qt.Key.Key_O: 'o', Qt.Key.Key_B: 'b',
             }
             action_char = key_map.get(key)
-        elif target == "arm":
-            key_map = {Qt.Key.Key_V: 'v', Qt.Key.Key_H: 'h', Qt.Key.Key_W: 'w'}
-            action_char = key_map.get(key)
 
         if action_char:
             self.send_packet(action_char)
+
+    def keyReleaseEvent(self, event):
+        key = event.key()
+        target = self.target_combo.currentData()
+
+        # When arrow up/down is released in arm mode, send stop
+        if target == "arm" and key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            if not event.isAutoRepeat():
+                self.send_arm_packet(0)  # stop
 
     # =================================================================
     # NETWORKING
@@ -413,6 +436,15 @@ class MainWindow(QMainWindow):
             self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
         except Exception as e:
             print(f"Error sending packet: {e}")
+
+    def send_arm_packet(self, direction):
+        """Send an arm control packet. direction: 0=stop, 1=increase, 2=decrease"""
+        current_state = self.state_combo.currentData()
+        packet = build_arm_command_packet(current_state, self.current_joint, direction)
+        try:
+            self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
+        except Exception as e:
+            print(f"Error sending arm packet: {e}")
 
     # =================================================================
     # VIDEO

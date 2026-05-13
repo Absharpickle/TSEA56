@@ -23,7 +23,7 @@ typedef struct {
     bool     valid;   // true om paketet är giltigt
     uint8_t  state;   // 0x00–0x03 (körläge)
     uint8_t  target;  // 0x00=wheel, 0x01=arm
-    char     action;  // ASCII-kommando ('f','s','e','o','u','v','h', etc.)
+    char     action;  // ASCII-kommando eller arm-byte (bits 0-5=joint, 6-7=dir)
 } CommandPacket;
 
 // 0x07 Item list packet from GUI

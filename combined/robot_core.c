@@ -357,7 +357,7 @@ static void handle_command_packet(const CommandPacket *cmd) {
         fwd[2] = cmd->target;
         if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
         log_verification(fwd, cmd->action);
-        printf("-> Manual Command Forwarded: '%c'\n", cmd->action);
+        printf("-> Manual Command Forwarded: 0x%02X\n", (unsigned char)cmd->action);
     }
     else if (cmd->state == 0x02 || cmd->state == 0x03) {
         init_karta();
@@ -379,7 +379,7 @@ static void handle_command_packet(const CommandPacket *cmd) {
         fwd[2] = cmd->target;
         if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
         log_verification(fwd, cmd->action);
-        printf("-> Manual Command Forwarded: '%c'\n", cmd->action);
+        printf("-> Manual Command Forwarded: 0x%02X\n", (unsigned char)cmd->action);
     }
 }
 
