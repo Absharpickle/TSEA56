@@ -62,6 +62,10 @@ int  loop_counter  = 0;
 uint8_t current_node = START;
 char current_dir = 's';
 uint8_t action_done = 0;
+uint8_t styr_gas_right = 0;
+uint8_t styr_gas_left  = 0;
+int8_t  styr_claw_r    = 0;
+int8_t  styr_claw_z    = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
 
@@ -449,6 +453,11 @@ static bool poll_action_done(long long elapsed_in_state,
     }
 
     StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+    styr_gas_right = resp.gas_right;
+    styr_gas_left  = resp.gas_left;
+    styr_claw_r    = resp.claw_pos_r;
+    styr_claw_z    = resp.claw_pos_z;
+    action_done    = resp.action_done;
     if (resp.action_done == 1) {
         *done_flag = true;
         return true;
@@ -751,13 +760,14 @@ static void send_telemetry(void) {
     telemetry_counter++;
     if (telemetry_counter < 50) return;
 
-    unsigned char tpkt[PACKET_SIZE + 6];
+    unsigned char tpkt[PACKET_SIZE + 10];
     build_telemetry_packet(tpkt,
                            (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
                            line_var_f, gyro1, gyro2, flags, current_node,
                            (uint8_t)current_item_index, (uint8_t)item_count,
-                           current_dir, action_done);
-    sendto(sockfd, tpkt, (PACKET_SIZE + 6), 0,
+                           current_dir, action_done,
+                           styr_gas_right, styr_gas_left, styr_claw_r, styr_claw_z);
+    sendto(sockfd, tpkt, (PACKET_SIZE + 10), 0,
            (struct sockaddr *)&cliaddr, sizeof(cliaddr));
     telemetry_counter = 0;
 }

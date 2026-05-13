@@ -30,22 +30,26 @@ def build_item_list_packet(item_edges):
 
 
 def parse_telemetry(data):
-    """Parse a 14-byte telemetry packet into a dict. Returns None if invalid."""
-    if len(data) != 14 or data[0] != 0x06 or data[13] != 0xFF:
+    """Parse an 18-byte telemetry packet into a dict. Returns None if invalid."""
+    if len(data) != 18 or data[0] != 0x06 or data[17] != 0xFF:
         return None
     
-    unpacked = struct.unpack('14B', data)
+    unpacked = struct.unpack('15BbbB', data)
     return {
-        'phase': unpacked[1],
-        'action': chr(unpacked[2]),
-        'next_action': chr(unpacked[3]),
-        'line_var': unpacked[4],
-        'gyro1': unpacked[5],
-        'gyro2': unpacked[6],
-        'flags': unpacked[7],
-        'current_node': unpacked[8],
-        'current_item': unpacked[9],
-        'item_count': unpacked[10],
-        'direction': chr(unpacked[11]),
-        'action_done': unpacked[12]
+        'phase': unpacked[0+1],
+        'action': chr(unpacked[1+1]),
+        'next_action': chr(unpacked[2+1]),
+        'line_var': unpacked[3+1],
+        'gyro1': unpacked[4+1],
+        'gyro2': unpacked[5+1],
+        'flags': unpacked[6+1],
+        'current_node': unpacked[7+1],
+        'current_item': unpacked[8+1],
+        'item_count': unpacked[9+1],
+        'direction': chr(unpacked[10+1]),
+        'action_done': unpacked[11+1],
+        'gas_right': unpacked[12+1],
+        'gas_left': unpacked[13+1],
+        'claw_pos_r': unpacked[14+1],
+        'claw_pos_z': unpacked[15+1],
     }

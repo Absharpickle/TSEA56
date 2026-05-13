@@ -227,10 +227,12 @@ class MainWindow(QMainWindow):
         self.lbl_items_progress = QLabel("Items: -")
         self.lbl_action_done = QLabel("Done: ●")
         self.lbl_action_done.setStyleSheet("font-size: 13px; font-weight: bold; color: #e74c3c; padding: 3px;")
+        self.lbl_gas = QLabel("Gas: R0 L0")
+        self.lbl_claw = QLabel("Claw: R0 Z0")
 
         for lbl in [self.lbl_phase, self.lbl_action, self.lbl_next_action,
                      self.lbl_line, self.lbl_gyro, self.lbl_flags,
-                     self.lbl_items_progress]:
+                     self.lbl_items_progress, self.lbl_gas, self.lbl_claw]:
             lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #ecf0f1; padding: 3px;")
             self.dashboard_layout.addWidget(lbl)
 
@@ -324,6 +326,10 @@ class MainWindow(QMainWindow):
         # Clear route display when robot goes idle
         if data['phase'] == 0 and self.map_frame.route_nodes:
             self.map_frame.set_route([])
+
+        # Styr motor data
+        self.lbl_gas.setText(f"Gas: R{data.get('gas_right', 0)} L{data.get('gas_left', 0)}")
+        self.lbl_claw.setText(f"Claw: R{data.get('claw_pos_r', 0)} Z{data.get('claw_pos_z', 0)}")
 
         node = data.get('current_node', 25)
         direction = data.get('direction', 's')
