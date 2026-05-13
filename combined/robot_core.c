@@ -315,6 +315,12 @@ static void read_sensors(void) {
 static void read_styr(void) {
     if (sim_motor || i2c_styr_fd < 0) return;
 
+    // Rate-limit: read at most every 200 ms to avoid overwhelming the slave
+    static long long last_styr_read_ms = 0;
+    long long now = current_time_ms();
+    if (now - last_styr_read_ms < 200) return;
+    last_styr_read_ms = now;
+
     unsigned char styr_raw[PACKET_SIZE];
     if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) != PACKET_SIZE) return;
 
