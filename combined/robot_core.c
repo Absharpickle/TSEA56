@@ -476,7 +476,19 @@ static bool poll_action_done(long long elapsed_in_state, bool *done_flag) {
     last_read_ms = current_time_ms();
 
     unsigned char styr_raw[PACKET_SIZE] = {0};
-    if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) != PACKET_SIZE) return false;
+    int n = read(i2c_styr_fd, styr_raw, PACKET_SIZE);
+    if (n != PACKET_SIZE) {
+        static int fail_count = 0;
+        if (++fail_count % 20 == 1)
+            printf("[DBG] styr read failed: got %d bytes (errno=%d)\n", n, errno);
+        return false;
+    }
+
+    static int ok_count = 0;
+    if (++ok_count % 20 == 1)
+        printf("[DBG] styr read OK: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+               styr_raw[0], styr_raw[1], styr_raw[2], styr_raw[3],
+               styr_raw[4], styr_raw[5], styr_raw[6], styr_raw[7]);
 
     StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
     styr_gas_right = resp.gas_right;
@@ -485,6 +497,7 @@ static bool poll_action_done(long long elapsed_in_state, bool *done_flag) {
     styr_claw_z    = resp.claw_pos_z;
     action_done    = resp.action_done;
     if (resp.action_done == 1) {
+        printf("[DBG] action_done DETECTED!\n");
         *done_flag = true;
         return true;
     }
