@@ -401,7 +401,7 @@ static void block_edge_ahead(void) {
 }
 
 static void handle_obstacle(void) {
-    if (!(is_hinder && !is_hinder2 && (hinder_counter < 4) && (hinder_timer > SLEEP/50))) {
+    if (!(is_hinder && !is_hinder2 && (hinder_counter < 10) && (hinder_timer > SLEEP/50))) {
         return;
     }
 
