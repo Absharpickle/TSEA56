@@ -185,36 +185,29 @@ void planera_hem_fran_pickup(int from_node, char from_dir) {
     int rutt_alt1[NODES], rutt_alt2[NODES];
     int cost_fwd;
     int cost_back;
-    int from_node2 = 99;
 
-    if (from_node == 99){
+    if (from_node == 99) {
+        // Standardanrop efter pickup: planera från pickup-noderna.
         cost_fwd  = hitta_rutt(pickup_utgang, START, rutt_alt1, dir_vid_vara);
         cost_back = hitta_rutt(pickup_ingang, START, rutt_alt2, dir_vid_vara) + 100;
-    }else{
-        if (from_node == START) {
-            from_node2 = 0;
-        }else if (from_dir == 'n') {
-            from_node2 = from_node - 5;
-        }else if (from_dir == 'e') {
-            from_node2 = from_node + 1;
-        }else if (from_dir == 's') {
-            from_node2 = from_node + 5;
-        }else if (from_dir == 'w') {
-            from_node2 = from_node - 1;
-        }
-        cost_fwd  = hitta_rutt(from_node2, START, rutt_alt1, from_dir);
+    } else {
+        // Hinder-omplan: roboten står vid from_node, planera direkt därifrån.
+        cost_fwd  = hitta_rutt(from_node, START, rutt_alt1, from_dir);
         cost_back = 9999;
     }
-    
+
     if (cost_fwd <= cost_back) {
         memcpy(rutt_hem, rutt_alt1, sizeof(rutt_alt1));
-        bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
-        int dlen = strlen(beslut_hem) + 1;
-        memmove(&beslut_hem[1], &beslut_hem[0], dlen);
-        beslut_hem[0] = 'f';
-        int rlen = 0; while (rutt_hem[rlen] != STOP) rlen++;
-        memmove(&rutt_hem[1], &rutt_hem[0], (rlen + 1) * sizeof(int));
-        rutt_hem[0] = pickup_ingang;
+        bygg_beslut(rutt_hem, (from_node == 99) ? dir_vid_vara : from_dir, beslut_hem);
+        if (from_node == 99) {
+            // Ursprungligt anrop: skjut in 'f' + pickup_ingang i början
+            int dlen = strlen(beslut_hem) + 1;
+            memmove(&beslut_hem[1], &beslut_hem[0], dlen);
+            beslut_hem[0] = 'f';
+            int rlen = 0; while (rutt_hem[rlen] != STOP) rlen++;
+            memmove(&rutt_hem[1], &rutt_hem[0], (rlen + 1) * sizeof(int));
+            rutt_hem[0] = pickup_ingang;
+        }
     } else {
         memcpy(rutt_hem, rutt_alt2, sizeof(rutt_alt2));
         bygg_beslut(rutt_hem, dir_vid_vara, beslut_hem);
@@ -230,26 +223,16 @@ void planera_hem_fran_pickup(int from_node, char from_dir) {
 void planera_nasta_vara(int from_node1, char from_dir1) {
     int rutt_tmp[NODES];
     int costs[4];
-    int from_node2 = 99;
     costs[0] = hitta_rutt(pickup_utgang, vara_u, rutt_tmp, dir_vid_vara);
     costs[1] = hitta_rutt(pickup_utgang, vara_v, rutt_tmp, dir_vid_vara);
     costs[2] = hitta_rutt(pickup_ingang, vara_u, rutt_tmp, dir_vid_vara) + 100;
     costs[3] = hitta_rutt(pickup_ingang, vara_v, rutt_tmp, dir_vid_vara) + 100;
 
-    if(from_node1 != 99){
-        if (from_node1 == START) {
-            from_node2 = 0;
-        }else if (from_dir1 == 'n') {
-            from_node2 = from_node1 - 5;
-        }else if (from_dir1 == 'e') {
-            from_node2 = from_node1 + 1;
-        }else if (from_dir1 == 's') {
-            from_node2 = from_node1 + 5;
-        }else if (from_dir1 == 'w') {
-            from_node2 = from_node1 - 1;
-        }
-        costs[0] = hitta_rutt(from_node2, vara_u, rutt_tmp, from_dir1);
-        costs[1] = hitta_rutt(from_node2, vara_v, rutt_tmp, from_dir1);   
+    if (from_node1 != 99) {
+        // Hinder-omplan: roboten står vid from_node1, planera direkt därifrån.
+        // Backup är inte ett alternativ mitt under körning.
+        costs[0] = hitta_rutt(from_node1, vara_u, rutt_tmp, from_dir1);
+        costs[1] = hitta_rutt(from_node1, vara_v, rutt_tmp, from_dir1);
         costs[2] = 9999;
         costs[3] = 9999;
     }
@@ -263,9 +246,9 @@ void planera_nasta_vara(int from_node1, char from_dir1) {
     int approach  = (best % 2 == 0) ? vara_u : vara_v;
     int through   = (approach == vara_u) ? vara_v : vara_u;
 
-    if(from_node1 != 99){
-        from_node = from_node2;
-        from_dir = from_dir1;
+    if (from_node1 != 99) {
+        from_node = from_node1;
+        from_dir  = from_dir1;
     }
     
     hitta_rutt(from_node, approach, rutt_till_vara, from_dir);
@@ -276,13 +259,16 @@ void planera_nasta_vara(int from_node1, char from_dir1) {
 
     bygg_beslut(rutt_till_vara, from_dir, beslut_till_vara);
 
-    int dlen = strlen(beslut_till_vara) + 1;
-    memmove(&beslut_till_vara[1], &beslut_till_vara[0], dlen);
-    beslut_till_vara[0] = backup ? 'b' : 'f';
+    if (from_node1 == 99) {
+        // Ursprungligt anrop efter pickup: skjut in 'f'/'b' + start-nod i början
+        int dlen = strlen(beslut_till_vara) + 1;
+        memmove(&beslut_till_vara[1], &beslut_till_vara[0], dlen);
+        beslut_till_vara[0] = backup ? 'b' : 'f';
 
-    int rlen = 0; while (rutt_till_vara[rlen] != STOP) rlen++;
-    memmove(&rutt_till_vara[1], &rutt_till_vara[0], (rlen + 1) * sizeof(int));
-    rutt_till_vara[0] = backup ? pickup_utgang : pickup_ingang;
+        int rlen = 0; while (rutt_till_vara[rlen] != STOP) rlen++;
+        memmove(&rutt_till_vara[1], &rutt_till_vara[0], (rlen + 1) * sizeof(int));
+        rutt_till_vara[0] = backup ? pickup_utgang : pickup_ingang;
+    }
 
     pickup_ingang = approach;
     pickup_utgang = through;
