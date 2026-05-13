@@ -466,32 +466,14 @@ static void handle_obstacle(void) {
 // =================================================================
 // I2C "ACTION DONE" POLLER (delas av rotation / pickup / drop)
 // =================================================================
-// Returnerar true om styrmodulen rapporterar att åtgärden är klar.
-// `last_packet` används som spam-filter för loggning (kan vara NULL för drop).
-static bool poll_action_done(long long elapsed_in_state,
-                             long long *last_read_ms,
-                             unsigned char *last_packet,
-                             bool *done_flag) {
+// Checks the latched action_done global (set by read_styr).
+// Returns true once action_done is detected after the 300ms grace period.
+static bool poll_action_done(long long elapsed_in_state, bool *done_flag) {
     if (*done_flag) return true;
-    if (sim_motor || elapsed_in_state <= 300 || i2c_styr_fd < 0) return false;
-    if (current_time_ms() - *last_read_ms <= 50) return false;
+    if (sim_motor || elapsed_in_state <= 300) return false;
 
-    *last_read_ms = current_time_ms();
-    unsigned char styr_raw[PACKET_SIZE] = {0};
-    if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) != PACKET_SIZE) return false;
-
-    if (last_packet && memcmp(styr_raw, last_packet, PACKET_SIZE) != 0) {
-        log_styr_response(styr_raw);
-        memcpy(last_packet, styr_raw, PACKET_SIZE);
-    }
-
-    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
-    styr_gas_right = resp.gas_right;
-    styr_gas_left  = resp.gas_left;
-    styr_claw_r    = resp.claw_pos_r;
-    styr_claw_z    = resp.claw_pos_z;
-    action_done    = resp.action_done;
-    if (resp.action_done == 1) {
+    if (action_done == 1) {
+        action_done = 0;  // Consume the latch
         *done_flag = true;
         return true;
     }
@@ -508,9 +490,7 @@ static void handle_rotation_state(long long elapsed_in_state) {
         rotation_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1000) ||
                         ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
     } else {
-        static long long last_rot_read = 0;
-        static unsigned char last_styr_rot[PACKET_SIZE] = {0};
-        poll_action_done(elapsed_in_state, &last_rot_read, last_styr_rot, &rotation_done);
+        poll_action_done(elapsed_in_state, &rotation_done);
     }
 
     if (rotation_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
@@ -578,9 +558,7 @@ static void handle_pickup_state(long long elapsed_in_state) {
         pickup_step_done = (aktivt_beslut == 'x' && elapsed_in_state >= 1500) ||
                            (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
     } else {
-        static long long last_pickup_read = 0;
-        static unsigned char last_styr_pick[PACKET_SIZE] = {0};
-        poll_action_done(elapsed_in_state, &last_pickup_read, last_styr_pick, &pickup_step_done);
+        poll_action_done(elapsed_in_state, &pickup_step_done);
     }
 
     if (pickup_step_done && aktivt_beslut == 'x') {
@@ -610,9 +588,7 @@ static void handle_drop_state(long long elapsed_in_state) {
         drop_step_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1500) ||
                          (aktivt_beslut == 'w' && elapsed_in_state >= 3000);
     } else {
-        static long long last_drop_read = 0;
-        // Drop använder inte spam-filter på loggen i originalet → skicka NULL
-        poll_action_done(elapsed_in_state, &last_drop_read, NULL, &drop_step_done);
+        poll_action_done(elapsed_in_state, &drop_step_done);
     }
 
     if (drop_step_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
@@ -842,7 +818,7 @@ int main() {
     // =============================================================
     while (1) {
         read_sensors();
-        // read_styr();  // Disabled: slave firmware doesn't handle SLA+R yet, breaks I2C bus
+        read_styr();
         handle_network_packets();
         run_autonomous_tick();
         send_telemetry();
