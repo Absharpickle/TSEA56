@@ -1,2 +1,5 @@
 .DS_Store
 .atsuo
+.pyc
+.code-workspace
+__pycache__
