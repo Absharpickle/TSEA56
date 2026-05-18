@@ -24,6 +24,13 @@ def build_arm_command_packet(state, joint, direction):
                        0x00, 0x00, 0x00, 0xFF)
 
 
+def build_reset_packet():
+    """Build an 8-byte 0x09 reset packet."""
+    return struct.pack('BBBBBBBB',
+                       0x09, 0x00, 0x00, 0x00,
+                       0x00, 0x00, 0x00, 0xFF)
+
+
 def build_item_list_packet(item_edges):
     """Build a variable-length 0x07 item-list packet.
     

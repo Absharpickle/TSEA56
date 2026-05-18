@@ -8,7 +8,7 @@ from PyQt6.QtGui import QImage, QPixmap
 
 from threads import VideoThread, TelemetryThread
 from map_widget import MapFrame
-from protocol import build_command_packet, build_item_list_packet, build_arm_command_packet
+from protocol import build_command_packet, build_item_list_packet, build_arm_command_packet, build_reset_packet
 
 IP_ADDRESS_HOME = "192.168.1.50"
 IP_ADDRESS_SITE = "10.42.0.1"
@@ -208,7 +208,7 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(self.target_combo)
         self.control_layout.addStretch()
 
-        lbl_keys = QLabel("Keys: [1234] State | [WA] Target | [↑↓←→SEOB] Wheel | [VH] Arm")
+        lbl_keys = QLabel("Keys: [1234] State | [TA] Target | [↑↓←→SEOB] Wheel | [VH] Arm | [SPACE] Reset")
         lbl_keys.setStyleSheet("color: #7f8c8d; font-size: 11px;")
         self.control_layout.addWidget(lbl_keys)
 
@@ -362,6 +362,12 @@ class MainWindow(QMainWindow):
     # =================================================================
     def keyPressEvent(self, event):
         key = event.key()
+
+        # Global reset on spacebar
+        if key == Qt.Key.Key_Space:
+            self.perform_reset()
+            return
+
         target = self.target_combo.currentData()
 
         # When target is arm, keys 1-6 select joint
@@ -445,6 +451,49 @@ class MainWindow(QMainWindow):
             self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
         except Exception as e:
             print(f"Error sending arm packet: {e}")
+
+    # =================================================================
+    # RESET
+    # =================================================================
+    def perform_reset(self):
+        """Full reset: wipe GUI state and tell the robot core to reset."""
+        # Send reset packet to robot
+        packet = build_reset_packet()
+        try:
+            self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
+            print("[RESET] Sent reset packet to robot")
+        except Exception as e:
+            print(f"Error sending reset packet: {e}")
+
+        # Reset item list
+        self.item_edges.clear()
+        self.refresh_item_list_widget()
+
+        # Reset map: clear route, highlights, active node back to 25
+        self.map_frame.set_route([])
+        self.map_frame.set_item_edges([])
+        self.set_active_node(25, 's')
+
+        # Reset combos to defaults
+        self.state_combo.setCurrentIndex(3)   # Manual, Manual
+        self.target_combo.setCurrentIndex(0)  # Wheel
+        self.current_joint = 1
+
+        # Reset dashboard labels
+        self.lbl_phase.setText("Phase: IDLE")
+        self.lbl_action.setText("Last Action: -")
+        self.lbl_next_action.setText("Next Action: -")
+        self.lbl_line.setText("Line: 0")
+        self.lbl_gyro.setText("Gyro: (0, 0)")
+        self.lbl_flags.setText("Flags: 0")
+        self.lbl_items_progress.setText("Items: -")
+        self.lbl_action_done.setStyleSheet("font-size: 13px; font-weight: bold; color: #e74c3c; padding: 3px;")
+        self.lbl_action_done.setText("Done: ●")
+        self.lbl_gas.setText("Gas: R0 L0")
+        self.lbl_claw.setText("Claw: R0 Z0")
+
+        self.setFocus()
+        print("[RESET] GUI state cleared")
 
     # =================================================================
     # VIDEO

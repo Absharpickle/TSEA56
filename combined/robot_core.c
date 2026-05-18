@@ -400,6 +400,23 @@ static void handle_network_packets(void) {
 
     gui_known = true;
 
+    // 0x09 Reset packet
+    if (n == PACKET_SIZE && buffer[0] == 0x09) {
+        printf("\n=== RESET RECEIVED FROM GUI ===\n\n");
+        reset();
+
+        // Send stop command to motors
+        unsigned char stop_pkt[PACKET_SIZE];
+        build_motor_packet(stop_pkt, 0x03, false,
+                           's', line_var_f, line_var_b, gyro1, gyro2);
+        if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+
+        // Clear item list
+        item_count = 0;
+        current_item_index = 0;
+        return;
+    }
+
     CommandPacket cmd = parse_command_packet(buffer, n);
     if (cmd.valid) {
         handle_command_packet(&cmd);
