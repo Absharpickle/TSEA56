@@ -92,6 +92,9 @@ uint8_t flags_korsning    = 0;
 uint8_t flags_ny_korsning = 0;
 uint8_t flags_ir          = 0;
 
+// Forward declaration (used by handle_network_packets before definition)
+static void start_phase_after_pickup(void);
+
 void reset() {
     current_phase        = PHASE_IDLE;
     current_action_index = 0;
