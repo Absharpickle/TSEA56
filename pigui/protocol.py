@@ -11,6 +11,26 @@ def build_command_packet(state, target, action_char):
                        0x00, 0x00, 0x00, 0xFF)
 
 
+def build_arm_command_packet(state, joint, direction):
+    """Build a 0x05 arm command packet.
+
+    joint: 1-6 (which joint to move)
+    direction: 0=stop, 1=increase, 2=decrease
+    Action byte: bits 0-5 = one-hot joint, bits 6-7 = direction
+    """
+    action_byte = (1 << (joint - 1)) | (direction << 6)
+    return struct.pack('BBBBBBBB',
+                       0x05, state, 0x01, action_byte,
+                       0x00, 0x00, 0x00, 0xFF)
+
+
+def build_reset_packet():
+    """Build an 8-byte 0x09 reset packet."""
+    return struct.pack('BBBBBBBB',
+                       0x09, 0x00, 0x00, 0x00,
+                       0x00, 0x00, 0x00, 0xFF)
+
+
 def build_item_list_packet(item_edges):
     """Build a variable-length 0x07 item-list packet.
     
@@ -30,22 +50,26 @@ def build_item_list_packet(item_edges):
 
 
 def parse_telemetry(data):
-    """Parse a 14-byte telemetry packet into a dict. Returns None if invalid."""
-    if len(data) != 14 or data[0] != 0x06 or data[13] != 0xFF:
+    """Parse an 18-byte telemetry packet into a dict. Returns None if invalid."""
+    if len(data) != 18 or data[0] != 0x06 or data[17] != 0xFF:
         return None
     
-    unpacked = struct.unpack('14B', data)
+    unpacked = struct.unpack('15BbbB', data)
     return {
-        'phase': unpacked[1],
-        'action': chr(unpacked[2]),
-        'next_action': chr(unpacked[3]),
-        'line_var': unpacked[4],
-        'gyro1': unpacked[5],
-        'gyro2': unpacked[6],
-        'flags': unpacked[7],
-        'current_node': unpacked[8],
-        'current_item': unpacked[9],
-        'item_count': unpacked[10],
-        'direction': chr(unpacked[11]),
-        'action_done': unpacked[12]
+        'phase': unpacked[0+1],
+        'action': chr(unpacked[1+1]),
+        'next_action': chr(unpacked[2+1]),
+        'line_var': unpacked[3+1],
+        'gyro1': unpacked[4+1],
+        'gyro2': unpacked[5+1],
+        'flags': unpacked[6+1],
+        'current_node': unpacked[7+1],
+        'current_item': unpacked[8+1],
+        'item_count': unpacked[9+1],
+        'direction': chr(unpacked[10+1]),
+        'action_done': unpacked[11+1],
+        'gas_right': unpacked[12+1],
+        'gas_left': unpacked[13+1],
+        'claw_pos_r': unpacked[14+1],
+        'claw_pos_z': unpacked[15+1],
     }

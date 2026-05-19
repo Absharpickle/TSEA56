@@ -62,8 +62,13 @@ int  loop_counter  = 0;
 uint8_t current_node = START;
 char current_dir = 's';
 uint8_t action_done = 0;
+uint8_t styr_gas_right = 0;
+uint8_t styr_gas_left  = 0;
+int8_t  styr_claw_r    = 0;
+int8_t  styr_claw_z    = 0;
 bool rotation_done = false;
 bool pickup_step_done = false;
+bool replan_pending_after_rotation = false;
 
 int flag_timer = 0;
 int temp_flag = 0;
@@ -306,6 +311,39 @@ static void read_sensors(void) {
 }
 
 // =================================================================
+// STYRMODUL INPUT (continuous, like read_sensors)
+// =================================================================
+static void read_styr(void) {
+    if (sim_motor || i2c_styr_fd < 0) return;
+
+    // Rate-limit: read at most every 200 ms to avoid overwhelming the slave
+    static long long last_styr_read_ms = 0;
+    long long now = current_time_ms();
+    if (now - last_styr_read_ms < 200) return;
+    last_styr_read_ms = now;
+
+    unsigned char styr_raw[PACKET_SIZE];
+    if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) != PACKET_SIZE) return;
+
+    static unsigned char last_styr_packet[PACKET_SIZE] = {0};
+    if (memcmp(styr_raw, last_styr_packet, PACKET_SIZE) != 0) {
+        log_styr_response(styr_raw);
+        memcpy(last_styr_packet, styr_raw, PACKET_SIZE);
+    }
+
+    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
+    styr_gas_right = resp.gas_right;
+    styr_gas_left  = resp.gas_left;
+    styr_claw_r    = resp.claw_pos_r;
+    styr_claw_z    = resp.claw_pos_z;
+    // Latch action_done: only set, never clear here.
+    // poll_action_done() will consume and clear it.
+    if (resp.action_done == 1) {
+        action_done = 1;
+    }
+}
+
+// =================================================================
 // NETWORK: Inkommande paket
 // =================================================================
 static void handle_command_packet(const CommandPacket *cmd) {
@@ -320,7 +358,7 @@ static void handle_command_packet(const CommandPacket *cmd) {
         fwd[2] = cmd->target;
         if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
         log_verification(fwd, cmd->action);
-        printf("-> Manual Command Forwarded: '%c'\n", cmd->action);
+        printf("-> Manual Command Forwarded: 0x%02X\n", (unsigned char)cmd->action);
     }
     else if (cmd->state == 0x02 || cmd->state == 0x03) {
         init_karta();
@@ -342,7 +380,7 @@ static void handle_command_packet(const CommandPacket *cmd) {
         fwd[2] = cmd->target;
         if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
         log_verification(fwd, cmd->action);
-        printf("-> Manual Command Forwarded: '%c'\n", cmd->action);
+        printf("-> Manual Command Forwarded: 0x%02X\n", (unsigned char)cmd->action);
     }
 }
 
@@ -362,6 +400,23 @@ static void handle_network_packets(void) {
     if (n <= 0) return;
 
     gui_known = true;
+
+    // 0x09 Reset packet
+    if (n == PACKET_SIZE && buffer[0] == 0x09) {
+        printf("\n=== RESET RECEIVED FROM GUI ===\n\n");
+        reset();
+
+        // Send stop command to motors
+        unsigned char stop_pkt[PACKET_SIZE];
+        build_motor_packet(stop_pkt, 0x03, false,
+                           's', line_var_f, line_var_b, gyro1, gyro2);
+        if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+
+        // Clear item list
+        item_count = 0;
+        current_item_index = 0;
+        return;
+    }
 
     CommandPacket cmd = parse_command_packet(buffer, n);
     if (cmd.valid) {
@@ -400,22 +455,58 @@ static void block_edge_ahead(void) {
     }
 }
 
+static void block_edge_front(void) {
+    if (current_dir == 'n') {
+        vag[current_node][current_node - 5] = 0;
+        vag[current_node - 5][current_node] = 0;
+    }
+    else if (current_dir == 'e') {
+        vag[current_node][current_node + 1] = 0;
+        vag[current_node + 1][current_node] = 0;
+    }
+    else if (current_dir == 's') {
+        vag[current_node][current_node + 5] = 0;
+        vag[current_node + 5][current_node] = 0;
+    }
+    else if (current_dir == 'w') {
+        vag[current_node][current_node - 1] = 0;
+        vag[current_node - 1][current_node] = 0;
+    }
+}
+
 static void handle_obstacle(void) {
-    if (!(is_hinder && !is_hinder2 && (hinder_counter < 4) && (hinder_timer > SLEEP/50))) {
+    if (!(is_hinder && !is_hinder2 && (hinder_counter < 10) && (hinder_timer > SLEEP/50))) {
         return;
     }
 
-    block_edge_ahead();
-    current_action_index = 0;
+    if (is_rotating) {
+        // current_dir pekar redan dit roboten siktar — blockera den kanten.
+        block_edge_front();
 
-    if (current_phase == PHASE_TO_ITEM && current_item_index == 0) {
-        planera_till_vara(current_node, current_dir);
-    } else if (current_phase == PHASE_TO_ITEM && current_item_index > 0) {
-        planera_nasta_vara(current_node, current_dir);
-    } else if (current_phase == PHASE_TO_HOME) {
-        planera_hem_fran_pickup(current_node, current_dir);
+        if (current_phase == PHASE_TO_ITEM && current_item_index == 0) {
+            planera_till_vara(current_node, current_dir);
+        } else if (current_phase == PHASE_TO_ITEM && current_item_index > 0) {
+            planera_nasta_vara(current_node, current_dir);
+        } else if (current_phase == PHASE_TO_HOME) {
+            planera_hem_fran_pickup(current_node, current_dir);
+        }
+        current_action_index = -1;
+        replan_pending_after_rotation = true;
+
+   
+    } else {
+        block_edge_ahead();
+        current_action_index = 0;
+
+        if (current_phase == PHASE_TO_ITEM && current_item_index == 0) {
+            planera_till_vara(current_node, current_dir);
+        } else if (current_phase == PHASE_TO_ITEM && current_item_index > 0) {
+            planera_nasta_vara(current_node, current_dir);
+        } else if (current_phase == PHASE_TO_HOME) {
+            planera_hem_fran_pickup(current_node, current_dir);
+        }
+        aktivt_beslut_fn(current_action_index);
     }
-    aktivt_beslut_fn(current_action_index);
 
     is_hinder       = false;
     is_hinder2      = true;
@@ -429,27 +520,14 @@ static void handle_obstacle(void) {
 // =================================================================
 // I2C "ACTION DONE" POLLER (delas av rotation / pickup / drop)
 // =================================================================
-// Returnerar true om styrmodulen rapporterar att åtgärden är klar.
-// `last_packet` används som spam-filter för loggning (kan vara NULL för drop).
-static bool poll_action_done(long long elapsed_in_state,
-                             long long *last_read_ms,
-                             unsigned char *last_packet,
-                             bool *done_flag) {
+// Checks the latched action_done global (set by read_styr).
+// Returns true once action_done is detected after the 300ms grace period.
+static bool poll_action_done(long long elapsed_in_state, bool *done_flag) {
     if (*done_flag) return true;
-    if (sim_motor || elapsed_in_state <= 300 || i2c_styr_fd < 0) return false;
-    if (current_time_ms() - *last_read_ms <= 50) return false;
+    if (sim_motor || elapsed_in_state <= 300) return false;
 
-    *last_read_ms = current_time_ms();
-    unsigned char styr_raw[PACKET_SIZE] = {0};
-    if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) != PACKET_SIZE) return false;
-
-    if (last_packet && memcmp(styr_raw, last_packet, PACKET_SIZE) != 0) {
-        log_styr_response(styr_raw);
-        memcpy(last_packet, styr_raw, PACKET_SIZE);
-    }
-
-    StyrResponse resp = parse_styr_response(styr_raw, PACKET_SIZE);
-    if (resp.action_done == 1) {
+    if (action_done == 1) {
+        action_done = 0;  // Consume the latch
         *done_flag = true;
         return true;
     }
@@ -466,9 +544,7 @@ static void handle_rotation_state(long long elapsed_in_state) {
         rotation_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1000) ||
                         ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
     } else {
-        static long long last_rot_read = 0;
-        static unsigned char last_styr_rot[PACKET_SIZE] = {0};
-        poll_action_done(elapsed_in_state, &last_rot_read, last_styr_rot, &rotation_done);
+        poll_action_done(elapsed_in_state, &rotation_done);
     }
 
     if (rotation_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
@@ -477,22 +553,27 @@ static void handle_rotation_state(long long elapsed_in_state) {
         rotation_done      = false;
         action_timer_start = current_time_ms();
         log_next_action    = true;
-    }
-    else if (rotation_done && (aktivt_beslut == 'e' || aktivt_beslut == 'o')) {
-        // Svängen är klar, vi går vidare
+    }else if (rotation_done && (aktivt_beslut == 'e' || aktivt_beslut == 'o')) {
         is_rotating    = false;
-        aktivt_beslut  = 'f';
         rotation_done  = false;
-        korsning_aktiv = 1; // Undvik att nuvarande korsning triggar igen
 
-        if (current_phase == PHASE_TO_ITEM) {
-            nasta_beslut = beslut_till_vara[current_action_index + 1];
-        } else if (current_phase == PHASE_TO_HOME) {
-            nasta_beslut = beslut_hem[current_action_index + 1];
+        if (replan_pending_after_rotation) {
+
+            replan_pending_after_rotation = false;
+            flags_ny_korsning             = 1;
+            korsning_aktiv                = 0;
+       
+        } else {
+            aktivt_beslut  = 'f';
+            korsning_aktiv = 1;
+            if (current_phase == PHASE_TO_ITEM) {
+                nasta_beslut = beslut_till_vara[current_action_index + 1];
+            } else if (current_phase == PHASE_TO_HOME) {
+                nasta_beslut = beslut_hem[current_action_index + 1];
+            }
+            if (sim_sensor) sim_segment_timer = current_time_ms();
         }
         log_next_action = true;
-
-        if (sim_sensor) sim_segment_timer = current_time_ms();
     }
 }
 
@@ -536,9 +617,7 @@ static void handle_pickup_state(long long elapsed_in_state) {
         pickup_step_done = (aktivt_beslut == 'x' && elapsed_in_state >= 1500) ||
                            (aktivt_beslut == 'v' && elapsed_in_state >= 3000);
     } else {
-        static long long last_pickup_read = 0;
-        static unsigned char last_styr_pick[PACKET_SIZE] = {0};
-        poll_action_done(elapsed_in_state, &last_pickup_read, last_styr_pick, &pickup_step_done);
+        poll_action_done(elapsed_in_state, &pickup_step_done);
     }
 
     if (pickup_step_done && aktivt_beslut == 'x') {
@@ -568,9 +647,7 @@ static void handle_drop_state(long long elapsed_in_state) {
         drop_step_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1500) ||
                          (aktivt_beslut == 'w' && elapsed_in_state >= 3000);
     } else {
-        static long long last_drop_read = 0;
-        // Drop använder inte spam-filter på loggen i originalet → skicka NULL
-        poll_action_done(elapsed_in_state, &last_drop_read, NULL, &drop_step_done);
+        poll_action_done(elapsed_in_state, &drop_step_done);
     }
 
     if (drop_step_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
@@ -749,15 +826,16 @@ static void run_autonomous_tick(void) {
 static void send_telemetry(void) {
     if (!gui_known) return;
     telemetry_counter++;
-    if (telemetry_counter < 50) return;
+    if (telemetry_counter < 10) return;
 
-    unsigned char tpkt[PACKET_SIZE + 6];
+    unsigned char tpkt[PACKET_SIZE + 10];
     build_telemetry_packet(tpkt,
                            (uint8_t)current_phase, aktivt_beslut, nasta_beslut,
                            line_var_f, gyro1, gyro2, flags, current_node,
                            (uint8_t)current_item_index, (uint8_t)item_count,
-                           current_dir, action_done);
-    sendto(sockfd, tpkt, (PACKET_SIZE + 6), 0,
+                           current_dir, action_done,
+                           styr_gas_right, styr_gas_left, styr_claw_r, styr_claw_z);
+    sendto(sockfd, tpkt, (PACKET_SIZE + 10), 0,
            (struct sockaddr *)&cliaddr, sizeof(cliaddr));
     telemetry_counter = 0;
 }
@@ -799,6 +877,7 @@ int main() {
     // =============================================================
     while (1) {
         read_sensors();
+        read_styr();
         handle_network_packets();
         run_autonomous_tick();
         send_telemetry();

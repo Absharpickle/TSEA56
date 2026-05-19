@@ -37,7 +37,7 @@ class TelemetryThread(QThread):
             try:
                 data, addr = self.sock.recvfrom(1024)
 
-                # 0x06 Telemetry packet (14 bytes)
+                # 0x06 Telemetry packet (14 or 18 bytes)
                 telemetry_data = parse_telemetry(data)
                 if telemetry_data:
                     self.telemetry_signal.emit(telemetry_data)

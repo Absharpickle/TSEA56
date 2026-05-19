@@ -48,6 +48,10 @@ StyrResponse parse_styr_response(const unsigned char *buf, int n) {
     StyrResponse resp = { .valid = false, .action_done = 0 };
     if (n == PACKET_SIZE) {
         resp.valid       = true;
+        resp.gas_right   = buf[0];
+        resp.gas_left    = buf[1];
+        resp.claw_pos_r  = buf[2];
+        resp.claw_pos_z  = buf[3];
         resp.action_done = buf[4]; // Byte 4: action_done flagga
     }
     return resp;
@@ -84,12 +88,14 @@ void build_motor_packet(unsigned char out[PACKET_SIZE],
    
 }
 
-void build_telemetry_packet(unsigned char out[PACKET_SIZE + 6],
+void build_telemetry_packet(unsigned char out[PACKET_SIZE + 10],
                             uint8_t phase, char action, char next_action,
                             uint8_t line_var_f, uint8_t gyro1, uint8_t gyro2,
                             uint8_t flags, uint8_t node,
                             uint8_t item_idx, uint8_t item_count,
-                            char direction, uint8_t action_done) {
+                            char direction, uint8_t action_done,
+                            uint8_t gas_right, uint8_t gas_left,
+                            int8_t claw_pos_r, int8_t claw_pos_z) {
     out[0]  = 0x06;
     out[1]  = phase;
     out[2]  = (unsigned char)action;
@@ -103,7 +109,11 @@ void build_telemetry_packet(unsigned char out[PACKET_SIZE + 6],
     out[10] = item_count;
     out[11] = (unsigned char)direction;
     out[12] = action_done;
-    out[13] = 0xFF;
+    out[13] = gas_right;
+    out[14] = gas_left;
+    out[15] = (unsigned char)claw_pos_r;
+    out[16] = (unsigned char)claw_pos_z;
+    out[17] = 0xFF;
 }
 
 int build_route_packet(unsigned char *out, const int *route, int max_nodes) {
