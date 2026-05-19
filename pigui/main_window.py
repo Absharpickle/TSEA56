@@ -8,7 +8,9 @@ from PyQt6.QtGui import QImage, QPixmap
 
 from threads import VideoThread, TelemetryThread
 from map_widget import MapFrame
-from protocol import build_command_packet, build_item_list_packet, build_arm_command_packet, build_reset_packet
+from protocol import (build_command_packet, build_item_list_packet,
+                      build_arm_command_packet, build_reset_packet,
+                      build_pickup_done_packet)
 
 IP_ADDRESS_HOME = "192.168.1.50"
 IP_ADDRESS_SITE = "10.42.0.1"
@@ -34,12 +36,12 @@ class MainWindow(QMainWindow):
         self.layout.setContentsMargins(10, 5, 10, 5)
 
         self.top_hlayout = QHBoxLayout()
-        self.top_hlayout.setSpacing(10)
+        self.top_hlayout.setSpacing(2)
         self.layout.addLayout(self.top_hlayout)
 
         # --- VIDEO ---
         self.image_label = QLabel(self)
-        self.image_label.setFixedSize(480, 360)
+        self.image_label.setFixedSize(350, 350)
         self.image_label.setStyleSheet("border: 2px solid #34495e; background-color: black;")
         self.image_label.setScaledContents(True)
         self.top_hlayout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignTop)
@@ -208,7 +210,7 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(self.target_combo)
         self.control_layout.addStretch()
 
-        lbl_keys = QLabel("Keys: [1234] State | [TA] Target | [↑↓←→SEOB] Wheel | [VH] Arm | [SPACE] Reset")
+        lbl_keys = QLabel("Keys: [1234] State | [TA] Target | [↑↓←→SEOB] Wheel | [VH] Arm | [P] Done | [SPACE] Reset")
         lbl_keys.setStyleSheet("color: #7f8c8d; font-size: 11px;")
         self.control_layout.addWidget(lbl_keys)
 
@@ -397,6 +399,11 @@ class MainWindow(QMainWindow):
         if key == Qt.Key.Key_T: self.target_combo.setCurrentIndex(0); return
         elif key == Qt.Key.Key_A: self.target_combo.setCurrentIndex(1); return
 
+        # Pickup done (manual arm mode)
+        if key == Qt.Key.Key_P:
+            self.send_pickup_done()
+            return
+
         # Wheel action keys
         action_char = None
         if target == "wheel":
@@ -494,6 +501,15 @@ class MainWindow(QMainWindow):
 
         self.setFocus()
         print("[RESET] GUI state cleared")
+
+    def send_pickup_done(self):
+        """Tell the robot that manual pickup is complete."""
+        packet = build_pickup_done_packet()
+        try:
+            self.control_sock.sendto(packet, (self.pi_ip, self.pi_port))
+            print("[PICKUP] Sent pickup-done to robot")
+        except Exception as e:
+            print(f"Error sending pickup-done: {e}")
 
     # =================================================================
     # VIDEO

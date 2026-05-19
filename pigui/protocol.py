@@ -31,6 +31,13 @@ def build_reset_packet():
                        0x00, 0x00, 0x00, 0xFF)
 
 
+def build_pickup_done_packet():
+    """Build an 8-byte 0x0A pickup-done packet."""
+    return struct.pack('BBBBBBBB',
+                       0x0A, 0x00, 0x00, 0x00,
+                       0x00, 0x00, 0x00, 0xFF)
+
+
 def build_item_list_packet(item_edges):
     """Build a variable-length 0x07 item-list packet.
     

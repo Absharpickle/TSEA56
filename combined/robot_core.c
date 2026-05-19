@@ -37,6 +37,7 @@ bool log_next_action         = false;
 bool is_rotating   = false;
 char pending_rotation_cmd = ' '; // Sparar rot-riktning medan den stannar
 bool is_picking_up = false;
+bool manual_pickup_active = false; // Manual arm control during pickup (state 0x01)
 char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'h' (höger)
 bool is_dropping   = false;
 bool is_hinder = false;
@@ -100,6 +101,7 @@ void reset() {
     is_rotating          = false;
     pending_rotation_cmd = ' ';
     is_picking_up        = false;
+    manual_pickup_active = false;
     pickup_cmd           = 'v';
     is_dropping          = false;
     is_hinder            = false;
@@ -400,6 +402,17 @@ static void handle_network_packets(void) {
 
     gui_known = true;
 
+    // 0x0A Pickup-done packet (manual arm mode)
+    if (n == PACKET_SIZE && buffer[0] == 0x0A) {
+        if (manual_pickup_active) {
+            printf("\n-> MANUAL PICKUP DONE. Resuming autonomous route.\n");
+            manual_pickup_active = false;
+            current_item_index++;
+            start_phase_after_pickup();
+        }
+        return;
+    }
+
     // 0x09 Reset packet
     if (n == PACKET_SIZE && buffer[0] == 0x09) {
         printf("\n=== RESET RECEIVED FROM GUI ===\n\n");
@@ -697,11 +710,26 @@ static void handle_intersection(void) {
     }
     else if (aktivt_beslut == 'X') {
         if (current_phase == PHASE_TO_ITEM) {
-            current_phase   = PHASE_PICKUP;
-            aktivt_beslut   = 'x';
-            nasta_beslut    = pickup_cmd;
-            is_picking_up   = true;
-            printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
+            current_phase = PHASE_PICKUP;
+            if (current_auto_state == 0x01) {
+                // Manual arm mode: pause auto, let user control arm
+                manual_pickup_active = true;
+                is_picking_up   = false;
+                aktivt_beslut   = 's';
+                nasta_beslut    = 's';
+                // Send one stop command so the robot halts
+                unsigned char stop_pkt[PACKET_SIZE];
+                build_motor_packet(stop_pkt, current_auto_state, false,
+                                   's', line_var_f, line_var_b, gyro1, gyro2);
+                if (!sim_motor) write(i2c_styr_fd, stop_pkt, PACKET_SIZE);
+                printf("\n-> MANUAL PICKUP %d/%d: Control arm, press P when done.\n",
+                       current_item_index + 1, item_count);
+            } else {
+                aktivt_beslut   = 'x';
+                nasta_beslut    = pickup_cmd;
+                is_picking_up   = true;
+                printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
+            }
             log_next_action = true;
         }
         else if (current_phase == PHASE_TO_HOME) {
@@ -756,7 +784,7 @@ static void send_motor_command(void) {
 // AUTONOMOUS STATE MACHINE (en tick)
 // =================================================================
 static void run_autonomous_tick(void) {
-    if (current_phase == PHASE_IDLE) return;
+    if (current_phase == PHASE_IDLE || manual_pickup_active) return;
 
     long long elapsed_in_state = current_time_ms() - action_timer_start;
 

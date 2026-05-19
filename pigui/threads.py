@@ -17,6 +17,7 @@ class VideoThread(QThread):
         while True:
             ret, frame = cap.read()
             if ret:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
                 self.change_pixmap_signal.emit(frame)
 
 
