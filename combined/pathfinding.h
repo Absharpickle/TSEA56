@@ -4,41 +4,35 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// --- ALGORITHM DEFINITIONS ---
-#define NODES 26     // 5x5 samt en start/slutnod
-#define START 25     // Start/slut på nod 25
-#define NONE -1      // Betyder att det inte finns en föregående nod
-#define STOP -1      // Stoppvillkor för ruttarray
-#define MAX_ITEMS 5 // Max antal varor per körning
+#define NODES 26        //5x5 noder plus en startnod. Detta värde kan ändras för att omforma banan.
+#define START 25        //start/slut-nod tilldelas värdet 25 då 0-24 är upptagna    
+#define NONE -1         //används som odefinierat värde när det inte finns en föregående nod i algoritmen
+#define STOP -1         //stoppvillkor i ruttarrayen
+#define MAX_ITEMS 5     //max antal varor roboten kan plocka
 
-// --- MAP DATA (definierade i pathfinding.c) ---
-extern char nodriktningsmatris[NODES][NODES];
-extern int  vag[NODES][NODES];
+extern char nodriktningsmatris[NODES][NODES];       //väderstreck för varje väg 'e' 'w' 'n' 's'
+extern int  vag[NODES][NODES];                      //om en väg mellan två noder existerar/tillåten, == 0/1
+extern int  rutt_till_vara[NODES];                  //rutt till vara i form av nodarray [25, 0, 1, 2, ..., STOP]                   
+extern int  rutt_hem[NODES];                        //rutt till hem i form av nodarray [..., 2, 1, 0, 25, STOP]
+extern char beslut_till_vara[NODES];                //beslut till till vara i form av beslutsarray ['f', 'o', 'f', ..., 'X']
+extern char beslut_hem[NODES];                      //beslut till till hem i form av beslutsarray ['b', ..., 'e', 'o', 'X']
 
-// --- ROUTE ARRAYS ---
-extern int  rutt_till_vara[NODES];
-extern int  rutt_hem[NODES];
-extern char beslut_till_vara[NODES];
-extern char beslut_hem[NODES];
-
-// --- ITEM STATE ---
-extern int  vara_u, vara_v;
-extern uint8_t item_list_u[MAX_ITEMS];
-extern uint8_t item_list_v[MAX_ITEMS];
-extern int item_count;
-extern int current_item_index;
-extern int pickup_ingang, pickup_utgang;
+extern int  vara_u, vara_v;                         //noder mellan varan. anänds för att sätta ut varan.
+extern uint8_t item_list_u[MAX_ITEMS];              //del-lista för alla noder mellan vara
+extern uint8_t item_list_v[MAX_ITEMS];              //del-lista för alla noder mellan vara
+extern int item_count;                              //hur många varor på banan
+extern int current_item_index;                      //vilken vara vi hämtar just nu
+extern int pickup_ingang, pickup_utgang;            //vilken nod vi ska köra in/köra ut när vi hämtar varan
 extern char dir_vid_vara;
 
-// --- FUNCTIONS ---
-void init_karta();
-char get_turn(char nu, char nasta);
-char apply_turn(char dir, char turn_cmd);
-char get_motsatt_dir(char nu);
-void bygg_beslut(int rutt[], char start_dir, char beslut[]);
-int  hitta_rutt(int start, int mal, int rutt[], char start_dir);
-void planera_till_vara(int from_node, char from_dir);
-void planera_hem_fran_pickup(int from_node, char from_dir);
-void planera_nasta_vara(int from_node1, char from_dir1);
 
-#endif // PATHFINDING_H
+void init_karta();                                                  //initierar kartan (tilldelar värden i nodriktningsmatris[][] & vag[][])                                                 
+char get_turn(char nu, char nasta);                                 //hjälpfunktion för att översätta väderstreck till beslut             
+char get_motsatt_dir(char nu);                                      //ger motsatt väderstreck
+void bygg_beslut(int rutt[], char start_dir, char beslut[]);        //översätter ruttenarray till beslutsarray beroende på var roboten startar
+int  hitta_rutt(int start, int mal, int rutt[], char start_dir);    //dijkstras algoritm för ruttarray    
+void planera_till_vara(int from_node, char from_dir);               //bestämmer bästa beslutsarray till varan
+void planera_hem_fran_pickup(int from_node, char from_dir);         //bestämmer bästa beslutsarray till hem
+void planera_nasta_vara(int from_node1, char from_dir1);            //bestämmer bästa beslutsarray mellan varor
+
+#endif 
