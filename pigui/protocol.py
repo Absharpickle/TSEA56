@@ -1,60 +1,61 @@
+# ------------------------------------------------------
+# Markus Hellers, Joel Eberhardsson - 28 maj 2026 - V1.0
+# ------------------------------------------------------
+
+## Protokollfunktioner för att bygga och parsa paket som skickas mellan GUI:t och roboten ##
+
 import struct
 
-
+# Bygg ett motorpaket (0x05) för hjul eller armkontroller
 def build_command_packet(state, target, action_char):
-    """Build an 8-byte 0x05 command packet."""
-    target_byte = 0x00 if target == "wheel" else 0x01
-    action_byte = ord(str(action_char)[0])
+    target_byte = 0x00 if target == "wheel" else 0x01   # 0x00 = hjul, 0x01 = arm
+    action_byte = ord(str(action_char)[0])              # Konvertera action-char till dess ASCII-värde
     
     return struct.pack('BBBBBBBB',
                        0x05, state, target_byte, action_byte,
-                       0x00, 0x00, 0x00, 0xFF)
+                       0x00, 0x00, 0x00, 0xFF)          # 8-byte paket: [0x05, state, target, action, 0, 0, 0, 0xFF]
 
 
+# Bygg ett motorpaket (0x05) specifikt för armens manuella läge
 def build_arm_command_packet(state, joint, direction):
-    """Build a 0x05 arm command packet.
-
-    joint: 1-6 (which joint to move)
-    direction: 0=stop, 1=increase, 2=decrease
+    """
+    joint: 1-6 (vilken led i armen som ska styras)
+    direction: 0=stopp, 1=öka, 2=minska
     Action byte: bits 0-5 = one-hot joint, bits 6-7 = direction
     """
     action_byte = (1 << (joint - 1)) | (direction << 6)
     return struct.pack('BBBBBBBB',
                        0x05, state, 0x01, action_byte,
-                       0x00, 0x00, 0x00, 0xFF)
+                       0x00, 0x00, 0x00, 0xFF) # 8-byte paket: [0x05, state, 0x01 (arm), action_byte, 0, 0, 0, 0xFF]
 
 
+# Bygg ett 0x09 reset-paket för att nollställa robotens tillstånd
 def build_reset_packet():
-    """Build an 8-byte 0x09 reset packet."""
     return struct.pack('BBBBBBBB',
                        0x09, 0x00, 0x00, 0x00,
-                       0x00, 0x00, 0x00, 0xFF)
+                       0x00, 0x00, 0x00, 0xFF) # 8-byte paket: [0x09, 0, 0, 0, 0, 0, 0, 0xFF]
 
 
+# Bygg ett 0x07 item-list paket för att skicka positioner av varor
 def build_item_list_packet(item_edges):
-    """Build a variable-length 0x07 item-list packet.
+    if not item_edges:  # Om listan är tom...
+        return None     # ...returnera None (inget paket att skicka)
     
-    Format: [0x07, N, u1, v1, u2, v2, ..., 0xFF]
-    """
-    if not item_edges:
-        return None
-    
-    n = len(item_edges)
+    n = len(item_edges)         # Antal varor i listan
     fmt = 'B' * (3 + 2 * n)
-    values = [0x07, n]
-    for u, v in item_edges:
-        values.extend([u, v])
-    values.append(0xFF)
+    values = [0x07, n]          # Pakettyp 0x07, följt av antal varor
+    for u, v in item_edges:     # Lägg till varje varas position (u, v) i paketet
+        values.extend([u, v])   # Lägg till u och v som två bytes i paketet
+    values.append(0xFF)         # Avslutande byte
     
-    return struct.pack(fmt, *values)
+    return struct.pack(fmt, *values) # Bygg paketet enligt dynamiskt format
 
-
+# Parsa ett 0x06 telemetripaket till en dictionary. Returnerar None om paketet är ogiltigt.
 def parse_telemetry(data):
-    """Parse an 18-byte telemetry packet into a dict. Returns None if invalid."""
-    if len(data) != 18 or data[0] != 0x06 or data[17] != 0xFF:
+    if len(data) != 18 or data[0] != 0x06 or data[17] != 0xFF: # Kontrollera att paketet har rätt läng
         return None
     
-    unpacked = struct.unpack('15BbbB', data)
+    unpacked = struct.unpack('15BbbB', data) # Parsa data
     return {
         'phase': unpacked[0+1],
         'action': chr(unpacked[1+1]),

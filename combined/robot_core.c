@@ -1,3 +1,6 @@
+//-------------------------------------------------------
+// Markus Hellers, Joel Eberhardsson - 29 Maj 2026 - V1.0
+//-------------------------------------------------------
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -13,84 +16,82 @@
 #include <stdint.h>
 #include <time.h>
 
+//LÄS HEADERFILERNA!
 #include "pathfinding.h"
 #include "protocol.h"
 
-// --- SIM MODE DEFINITIONS ---
-#define SIM_SEGMENT_MS 1000
-#define SLEEP 25000
+#define SIM_SEGMENT_MS 1000 //för simulation
+#define SLEEP 25000 //väntetid för raspberry pi så den inte ber om informaiton för ofta
 
-// --- STATE MACHINE ---
-typedef enum {
-    PHASE_IDLE = 0,
-    PHASE_TO_ITEM,
-    PHASE_PICKUP,
-    PHASE_TO_HOME,
-    PHASE_DROP
-} AutoPhase;
 
-AutoPhase current_phase      = PHASE_IDLE;
-int current_action_index     = 0;
-unsigned char current_auto_state = 1;
-bool log_next_action         = false;
+typedef enum {  //status maskin som säger vilken fas roboten är i
+    PHASE_IDLE = 0,  //vilande
+    PHASE_TO_ITEM,   //påväg mot vara
+    PHASE_PICKUP,    //plockar upp vara
+    PHASE_TO_HOME,   //åker hem
+    PHASE_DROP       //lämnar vara
+} AutoPhase;         //namn på datatypen
 
-bool is_rotating   = false;
-char pending_rotation_cmd = ' '; // Sparar rot-riktning medan den stannar
-bool is_picking_up = false;
-char pickup_cmd    = 'v'; // Upphämtningskommando: 'v' (vänster) eller 'h' (höger)
-bool is_dropping   = false;
-bool is_hinder = false;
-bool is_hinder2 = false;
-bool drop_step_done = false;
-long long action_timer_start = 0;
-uint8_t korsning_aktiv = 0;
+AutoPhase current_phase      = PHASE_IDLE; //börjar stillastående
+int current_action_index     = 0;          //index som används i beslutsarrayen
+unsigned char current_auto_state = 1;      //status som avgör manuell/automatisk för arm och hjul 
+bool log_next_action         = false;      //används för att logga sensor och styrinformation till ett textdoument för felsökning
 
-// --- SIM MODE GLOBALS ---
-bool sim_sensor = false;
-bool sim_motor  = false;
-long long sim_segment_timer = 0;
+bool is_rotating   = false;                 //boolean för om roboten roterar just nu
+char pending_rotation_cmd = ' ';            //används för att spara rotationsriktning innan en rotation
+bool is_picking_up = false;                 //om roboten plockar just nu
+char pickup_cmd    = 'v';                   //upphämtningskommando beroende på varans position höger/vänster
+bool is_dropping   = false;                 //om roboten lämnar vara just nu
+bool is_hinder = false;                     //om det finns ett hinder framför
+bool is_hinder2 = false;                    //används för att låsa hinderhanteringen
+bool drop_step_done = false;                //används för att lämna varan    
+long long action_timer_start = 0;           //tid när nuvarande åtgärd startade
+uint8_t korsning_aktiv = 0;                 //om man står i en korsning (undvika dubbel triggande)
 
-// --- TELEMETRY GLOBALS ---
-bool gui_known        = false;
-int telemetry_counter = 0;
-bool route_changed    = false; // Flagga: ny rutt ska skickas till GUI
+bool sim_sensor = false;            //simulera sensor om den inte finns
+bool sim_motor  = false;            //simulera styrmodul om den inte finns
+long long sim_segment_timer = 0;    //tid för simulerad körsträcka
 
-// --- LIVE STATE ---
-char nasta_beslut  = 's';
-char aktivt_beslut = 's';
-int  loop_counter  = 0;
-uint8_t current_node = START;
-char current_dir = 's';
-uint8_t action_done = 0;
-uint8_t styr_gas_right = 0;
-uint8_t styr_gas_left  = 0;
-int8_t  styr_claw_r    = 0;
-int8_t  styr_claw_z    = 0;
-bool rotation_done = false;
-bool pickup_step_done = false;
+bool gui_known        = false;      
+int telemetry_counter = 0;          
+bool route_changed    = false; 
 
-int flag_timer = 0;
-int temp_flag = 0;
-int hinder_counter = 0;
-int hinder_timer = 0;
+char nasta_beslut  = 's';           //nästa beslut, i början "stopp"
+char aktivt_beslut = 's';           //beslutet som körs just nu
+int  loop_counter  = 0;             //räknare
+uint8_t current_node = START;       //noden roboten befinner sig i 
+char current_dir = 's';             //riktningen roboten är vänd mot
+uint8_t action_done = 0;            //används när styrmodulen skickar klartecken
+uint8_t styr_gas_right = 0;         //gaspådrag höger från styr
+uint8_t styr_gas_left  = 0;         //gaspådrag vänster från vänster
+int8_t  styr_claw_r    = 0;         //klo-position (rotation) från styr
+int8_t  styr_claw_z    = 0;         //klo-position (höjd) från styr 
+bool rotation_done = false;         //om rotation är färdig
+bool pickup_step_done = false;      //om hämtande av vara är färdig
 
-// --- SENSOR / IO STATE (delas mellan main och hjälpfunktioner) ---
-int sockfd = -1;
-int i2c_styr_fd = -1;
-int i2c_sens_fd = -1;
-struct sockaddr_in cliaddr;
+int flag_timer = 0;                 //räknare för korsningsflagga
+int temp_flag = 0;                  //tidigare värde på korsningsflagga
+int hinder_counter = 0;             //räknare för antal hinder
+int hinder_timer = 0;               //timer för hinderupptäckning
 
-uint8_t line_var_f = 0;
-uint8_t line_var_b = 0;
-uint8_t angle      = 0;
-uint8_t gyro1      = 0;
-uint8_t gyro2      = 0;
+int sockfd = -1;            //filbeskrivning ej öppen
+int i2c_styr_fd = -1;       //filbeskrivning ej öppen
+int i2c_sens_fd = -1;       //filbeskrivning ej öppen
+struct sockaddr_in cliaddr;     //adress til gui
 
-uint8_t flags             = 0;
+uint8_t line_var_f = 0;     //linjeföljning främre
+uint8_t line_var_b = 0;     //linjeföljning bakre
+uint8_t angle      = 0;     //vinkel
+uint8_t gyro1      = 0;     //gyro 
+uint8_t gyro2      = 0;     //gyro
+
+//statusflaggor som tas från sensormodulen
+uint8_t flags             = 0;      
 uint8_t flags_korsning    = 0;
 uint8_t flags_ny_korsning = 0;
 uint8_t flags_ir          = 0;
 
+//resetfunktion
 void reset() {
     current_phase        = PHASE_IDLE;
     current_action_index = 0;
@@ -133,18 +134,14 @@ void reset() {
     init_karta();
 }
 
-// =================================================================
-// HJÄLPFUNKTION: Tidsmätning i millisekunder
-// =================================================================
-long long current_time_ms() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+
+long long current_time_ms() { //funktion för nuvarande tid
+    struct timeval tv;      //sekunder & mikrosekunder
+    gettimeofday(&tv, NULL);    //aktuell tid   
+    return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000; //konvertera till ms
 }
 
-// =================================================================
-// LOGGNING FÖR STYRMODUL (med datum/tid)
-// =================================================================
+//loggfunktion för styrmodulen
 void log_styr_response(const unsigned char *received) {
     FILE *f = fopen(VERIFY_LOG_FILE, "a");
     if (f == NULL) return;
@@ -156,25 +153,23 @@ void log_styr_response(const unsigned char *received) {
     fclose(f);
 }
 
-// =================================================================
-// STATE MACHINE: Beslutsfunktion och autonom startsekvens
-// =================================================================
+//uppdaterar aktivt och nästa beslut utifrån index och fas
 void aktivt_beslut_fn(int index) {
     if (current_phase == PHASE_TO_ITEM) {
         aktivt_beslut = beslut_till_vara[index];
-        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
-            nasta_beslut = 'f';
-        } else if (aktivt_beslut == 'X') {
+        if (aktivt_beslut == 'e' || aktivt_beslut == 'o') { //rotation
+            nasta_beslut = 'f';                             //efter rotation ska 'f' skickas till styr
+        } else if (aktivt_beslut == 'X') {                  //plocka vara
             nasta_beslut = pickup_cmd;
         } else {
-            nasta_beslut = beslut_till_vara[index + 1];
+            nasta_beslut = beslut_till_vara[index + 1];     
         }
     } else if (current_phase == PHASE_PICKUP) {
         aktivt_beslut = pickup_cmd;
-        if (current_item_index + 1 < item_count) {
+        if (current_item_index + 1 < item_count) {      //finns flera varor att hämta
             nasta_beslut = 'f';
         } else {
-            nasta_beslut = beslut_hem[0];
+            nasta_beslut = beslut_hem[0];           //inga varor kvar, använd beslut_hem array
         }
     } else if (current_phase == PHASE_TO_HOME) {
         aktivt_beslut = beslut_hem[index];
@@ -186,31 +181,31 @@ void aktivt_beslut_fn(int index) {
     }
 }
 
-// Sätt upp rotation om aktivt_beslut är en sväng, annars starta sim-timer.
-// Anropas efter att aktivt_beslut_fn har valt nästa kommando från stillastående.
+//förbereder rotation eller startar en simulerad sträcka
 static void prime_action_or_rotation(void) {
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
-        is_rotating          = true;
-        pending_rotation_cmd = aktivt_beslut;
-        aktivt_beslut        = 's'; // Skicka stop först (står redan stilla)
-        action_timer_start   = current_time_ms();
+        is_rotating          = true;        //
+        pending_rotation_cmd = aktivt_beslut;       //spara svängriktning
+        aktivt_beslut        = 's';                 //skicka 's' så roboten stannar innan den roterar
+        action_timer_start   = current_time_ms();   //starta timer för åtgärd
     } else if (sim_sensor) {
         sim_segment_timer = current_time_ms();
     }
 }
 
+//startar automatiserade uppdraget
 void start_autonomous_sequence(unsigned char state) {
-    if (item_count <= 0) {
-        printf("[!] No items configured. Send item list (0x07) first.\n");
+    if (item_count <= 0) {  //användaren måste välja en vara innan automatiska körningar startar
+        printf("Inga varor placerade!\n");
         return;
     }
 
-    current_item_index = 0;
+    current_item_index = 0;     
     vara_u = item_list_u[0];
     vara_v = item_list_v[0];
 
-    printf("\n=== AUTONOMOUS ROUTE: %d item(s) to collect ===\n", item_count);
-    printf("-> Item 1/%d: edge %d <-> %d\n", item_count, vara_u, vara_v);
+    printf("\nAutomatisk körning påbörjas, %d varor att hämta ===\n", item_count);
+    printf("Vara 1/%d: väg %d <-> %d\n", item_count, vara_u, vara_v);
     planera_till_vara(START, 's');
     planera_hem_fran_pickup(99, 'a');
 
@@ -222,32 +217,30 @@ void start_autonomous_sequence(unsigned char state) {
 
     aktivt_beslut_fn(current_action_index);
     current_node = rutt_till_vara[0];
-    current_dir  = 's';
+    current_dir  = 's';         //roboten står alltid söderut från start
 
     prime_action_or_rotation();
 
     log_next_action = true;
-    route_changed   = true; // Skicka rutten till GUI
-    printf("-> Route Calculated. Driving to item 1/%d...\n", item_count);
-    if (sim_sensor) printf("[SIM] Intersections will be triggered every %d ms\n", SIM_SEGMENT_MS);
+    route_changed   = true; //skickar rutten till gui:n
+    printf("-> Rutt beräknad. Åker till vara 1/%d...\n", item_count);
+    if (sim_sensor) printf("[SIMULERING] korsningar kommer upptäckas var %d ms\n", SIM_SEGMENT_MS);
 }
 
-// =================================================================
-// SETUP: I2C + UDP
-// =================================================================
+//funktion för att initiera i2c
 static int open_i2c(uint8_t addr, const char *name, bool *sim_flag) {
-    int fd = open(I2C_DEVICE, O_RDWR);
-    if (fd >= 0) {
-        ioctl(fd, I2C_SLAVE, addr);
-        if (write(fd, NULL, 0) < 0) {
+    int fd = open(I2C_DEVICE, O_RDWR);      //öppnar i2C bussen för läs & skriv
+    if (fd >= 0) {                          //om bussen går att öppna
+        ioctl(fd, I2C_SLAVE, addr);         //välj slav på bussen
+        if (write(fd, NULL, 0) < 0) {       //kolla om får något svar
             *sim_flag = true;
-            printf("[SIM] %s (0x%02X) missing. Disabled.\n", name, addr);
+            printf("[SIMULERING] %s (0x%02X) saknas. Avstängd.\n", name, addr);
         } else {
-            printf("Connected to %s (0x%02X)\n", name, addr);
+            printf("Uppkopplad till %s (0x%02X)\n", name, addr);
         }
     } else {
         *sim_flag = true;
-        printf("[SIM] Could not open I2C for %s.\n", name);
+        printf("[SIMULERING] kan inte öppna i2c bussen för %s.\n", name);
     }
     return fd;
 }
@@ -275,9 +268,7 @@ static int setup_udp_socket(void) {
     return fd;
 }
 
-// =================================================================
-// SENSOR INPUT
-// =================================================================
+//läser sensorpaket och extraherar information
 static void read_sensors(void) {
     if (sim_sensor || i2c_sens_fd < 0) return;
 
@@ -291,41 +282,38 @@ static void read_sensors(void) {
     }
 
     SensorData sd = parse_sensor_packet(sensor_raw);
-    flags      = sd.flags;
-    line_var_f = sd.line_var_f;
+    flags      = sd.flags;      
+    line_var_f = sd.line_var_f;  
     line_var_b = sd.line_var_b;
     angle      = sd.angle;
     gyro1      = sd.gyro1;
     gyro2      = sd.gyro2;
 
-    flags_korsning = (flags & 0x0C) >> 2;
-    flags_ir       = (flags & 0x10) >> 4;
+    flags_korsning = (flags & 0x0C) >> 2;   //typ av korsning 
+    flags_ir       = (flags & 0x10) >> 4;   //om ir sensorn upptäcker ett hinder
 
     if (flags_ir == 0b00000001) {
-        is_hinder = true;
+        is_hinder = true;       //sätt till true om flaggan är aktiv
     }
 
-    if (flags_korsning == 1)      pickup_cmd = 'v';
-    else if (flags_korsning == 3) pickup_cmd = 'h';
+    if (flags_korsning == 1)      pickup_cmd = 'v';     //1 betyder upphämtningplats till vänster
+    else if (flags_korsning == 3) pickup_cmd = 'h';     //3 betyder upphämtningsplats åt höger
 }
 
-// =================================================================
-// STYRMODUL INPUT (continuous, like read_sensors)
-// =================================================================
+//läser status från styrmodulen
 static void read_styr(void) {
     if (sim_motor || i2c_styr_fd < 0) return;
 
-    // Rate-limit: read at most every 200 ms to avoid overwhelming the slave
     static long long last_styr_read_ms = 0;
     long long now = current_time_ms();
-    if (now - last_styr_read_ms < 200) return;
+    if (now - last_styr_read_ms < 200) return;  //vi vill inte läsa för ofta 
     last_styr_read_ms = now;
 
     unsigned char styr_raw[PACKET_SIZE];
     if (read(i2c_styr_fd, styr_raw, PACKET_SIZE) != PACKET_SIZE) return;
 
     static unsigned char last_styr_packet[PACKET_SIZE] = {0};
-    if (memcmp(styr_raw, last_styr_packet, PACKET_SIZE) != 0) {
+    if (memcmp(styr_raw, last_styr_packet, PACKET_SIZE) != 0) { //logga varje ändring
         log_styr_response(styr_raw);
         memcpy(last_styr_packet, styr_raw, PACKET_SIZE);
     }
@@ -335,19 +323,15 @@ static void read_styr(void) {
     styr_gas_left  = resp.gas_left;
     styr_claw_r    = resp.claw_pos_r;
     styr_claw_z    = resp.claw_pos_z;
-    // Latch action_done: only set, never clear here.
-    // poll_action_done() will consume and clear it.
-    if (resp.action_done == 1) {
-        action_done = 1;
+  
+    if (resp.action_done == 1) {    //om åtgärd klar
+        action_done = 1;            //sätt flagga till 1
     }
 }
-
-// =================================================================
-// NETWORK: Inkommande paket
-// =================================================================
+//hanterar paket från gui:n
 static void handle_command_packet(const CommandPacket *cmd) {
-    if (cmd->state == 0x00 || cmd->state == 0x01) {
-        if (cmd->action == 'f' && current_phase == PHASE_IDLE) {
+    if (cmd->state == 0x00 || cmd->state == 0x01) { //om hjulen skall köras automatiskt
+        if (cmd->action == 'f' && current_phase == PHASE_IDLE) { //börja automatiska styrningen om användaren skickar 'f'
             start_autonomous_sequence(cmd->state);
             return;
         }
@@ -355,15 +339,15 @@ static void handle_command_packet(const CommandPacket *cmd) {
         build_motor_packet(fwd, cmd->state, false, cmd->action,
                            line_var_f, line_var_b, gyro1, gyro2);
         fwd[2] = cmd->target;
-        if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
+        if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);   //skicka packet till styr
         log_verification(fwd, cmd->action);
-        printf("-> Manual Command Forwarded: 0x%02X\n", (unsigned char)cmd->action);
+
     }
-    else if (cmd->state == 0x02 || cmd->state == 0x03) {
-        init_karta();
-        is_hinder2 = false;
+    else if (cmd->state == 0x02 || cmd->state == 0x03) {    //om vi byter till manuell hjulstyrning
+        init_karta();       //initiera kartan igen för att ta bort hinder
+        is_hinder2 = false; //lås upp hinderspärr
         if (current_phase != PHASE_IDLE) {
-            printf("\n[!] MANUAL OVERRIDE DETECTED. Canceling Auto Route.\n");
+            printf("\nManuellt läge! Avbryter automatisk körning.\n");
             current_phase        = PHASE_IDLE;
             is_rotating          = false;
             is_picking_up        = false;
@@ -375,20 +359,20 @@ static void handle_command_packet(const CommandPacket *cmd) {
         }
         unsigned char fwd[PACKET_SIZE];
         build_motor_packet(fwd, cmd->state, false, cmd->action,
-                           line_var_f, line_var_b, gyro1, gyro2);
+                           line_var_f, line_var_b, gyro1, gyro2);       //skicka packet till styr
         fwd[2] = cmd->target;
         if (!sim_motor) write(i2c_styr_fd, fwd, PACKET_SIZE);
         log_verification(fwd, cmd->action);
-        printf("-> Manual Command Forwarded: 0x%02X\n", (unsigned char)cmd->action);
     }
 }
 
+//tar emot varulista från gui:n
 static void handle_item_list_packet(const ItemListPacket *items) {
     item_count = items->count;
     memcpy(item_list_u, items->items_u, items->count * sizeof(uint8_t));
     memcpy(item_list_v, items->items_v, items->count * sizeof(uint8_t));
     current_item_index = 0;
-    printf("[ITEMS] Received %d valid item(s) from GUI\n", item_count);
+    printf("[VAROR] Mottagit %d varor från GUI\n", item_count);
 }
 
 static void handle_network_packets(void) {
@@ -400,12 +384,10 @@ static void handle_network_packets(void) {
 
     gui_known = true;
 
-    // 0x09 Reset packet
     if (n == PACKET_SIZE && buffer[0] == 0x09) {
         printf("\n=== RESET RECEIVED FROM GUI ===\n\n");
         reset();
 
-        // Send stop command to motors
         unsigned char stop_pkt[PACKET_SIZE];
         build_motor_packet(stop_pkt, 0x03, false,
                            's', line_var_f, line_var_b, gyro1, gyro2);
@@ -428,9 +410,7 @@ static void handle_network_packets(void) {
     }
 }
 
-// =================================================================
-// OBSTACLE HANDLING
-// =================================================================
+//blockera väg som hindret befinner sig på
 static void block_edge_ahead(void) {
     if (current_node == START) {
         vag[0][5] = 0;
@@ -453,14 +433,14 @@ static void block_edge_ahead(void) {
         vag[current_node - 2][current_node - 1] = 0;
     }
 }
-
+//hinderhantering
 static void handle_obstacle(void) {
-    if (!(is_hinder && !is_hinder2 && (hinder_counter < 10) && (hinder_timer > SLEEP/50))) {
+    if (!(is_hinder && !is_hinder2 && (hinder_counter < 5) && (hinder_timer > SLEEP/50))) {    //om inte mer än 5 hinder och timern hunnit gå ett tag
         return;
     }
 
     block_edge_ahead();
-    current_action_index = 0;
+    current_action_index = 0;   //reseta action_index eftersom beslutsarrayena uppdateras
 
     if (current_phase == PHASE_TO_ITEM && current_item_index == 0) {
         planera_till_vara(current_node, current_dir);
@@ -480,26 +460,20 @@ static void handle_obstacle(void) {
     hinder_timer = 0;
 }
 
-// =================================================================
-// I2C "ACTION DONE" POLLER (delas av rotation / pickup / drop)
-// =================================================================
-// Checks the latched action_done global (set by read_styr).
-// Returns true once action_done is detected after the 300ms grace period.
+//kollar om åtgärden är klar
 static bool poll_action_done(long long elapsed_in_state, bool *done_flag) {
     if (*done_flag) return true;
     if (sim_motor || elapsed_in_state <= 300) return false;
 
     if (action_done == 1) {
-        action_done = 0;  // Consume the latch
+        action_done = 0; 
         *done_flag = true;
         return true;
     }
     return false;
 }
 
-// =================================================================
-// ROTATION
-// =================================================================
+//hanterar rotationer
 static void handle_rotation_state(long long elapsed_in_state) {
     flag_timer = 0;
 
@@ -507,24 +481,23 @@ static void handle_rotation_state(long long elapsed_in_state) {
         rotation_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1000) ||
                         ((aktivt_beslut == 'e' || aktivt_beslut == 'o') && elapsed_in_state >= 2000);
     } else {
-        poll_action_done(elapsed_in_state, &rotation_done);
+        poll_action_done(elapsed_in_state, &rotation_done); //om rotation_done är true resetas action_done
     }
 
-    if (rotation_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
-        // Stoppet är klart, nu kan vi svänga!
-        aktivt_beslut      = pending_rotation_cmd;
+    if (rotation_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {  //om vi inte roterar jsut nu och vi redan har stoppat eller backstoppat
+        aktivt_beslut      = pending_rotation_cmd;  //lagra kommandot
         rotation_done      = false;
         action_timer_start = current_time_ms();
         log_next_action    = true;
     }
-    else if (rotation_done && (aktivt_beslut == 'e' || aktivt_beslut == 'o')) {
-        // Svängen är klar, vi går vidare
+    else if (rotation_done && (aktivt_beslut == 'e' || aktivt_beslut == 'o')) { //om rotationen är klar
         is_rotating    = false;
         aktivt_beslut  = 'f';
         rotation_done  = false;
-        korsning_aktiv = 1; // Undvik att nuvarande korsning triggar igen
+        korsning_aktiv = 1; //undviker att samma korsning aktiveras igen
 
-        if (current_phase == PHASE_TO_ITEM) {
+        //uppdatera rätt beslutsarray
+        if (current_phase == PHASE_TO_ITEM) {   
             nasta_beslut = beslut_till_vara[current_action_index + 1];
         } else if (current_phase == PHASE_TO_HOME) {
             nasta_beslut = beslut_hem[current_action_index + 1];
@@ -535,41 +508,39 @@ static void handle_rotation_state(long long elapsed_in_state) {
     }
 }
 
-// =================================================================
-// PICKUP
-// =================================================================
-// Efter avslutad pickup: starta nästa fas (nästa vara eller hem).
+//procedur efter pickup
 static void start_phase_after_pickup(void) {
-    if (current_item_index < item_count) {
-        vara_u = item_list_u[current_item_index];
+    if (current_item_index < item_count) {  //kollar om det finns fler varor
+        vara_u = item_list_u[current_item_index];   
         vara_v = item_list_v[current_item_index];
-        printf("\n-> Item %d/%d: edge %d <-> %d\n",
-               current_item_index + 1, item_count, vara_u, vara_v);
-        planera_nasta_vara(99, 'a');
+        printf("\n-> Vara %d/%d: väg %d <-> %d\n",
+               current_item_index + 1, item_count, vara_u, vara_v); 
+        planera_nasta_vara(99, 'a');    //skicka '99' och 'a' enligt standard
         planera_hem_fran_pickup(99, 'a');
 
-        current_phase        = PHASE_TO_ITEM;
+        current_phase        = PHASE_TO_ITEM; 
         current_action_index = 0;
         aktivt_beslut_fn(current_action_index);
         prime_action_or_rotation();
 
-        printf("-> PHASE CHANGE: Driving to item %d/%d...\n",
+        printf("-> Fasbyte: Åker till vara %d/%d...\n",
                current_item_index + 1, item_count);
-    } else {
+    } else {  //åk hem
         planera_hem_fran_pickup(99, 'a');
-        current_phase        = PHASE_TO_HOME;
+        current_phase        = PHASE_TO_HOME
         current_action_index = 0;
         aktivt_beslut_fn(current_action_index);
         prime_action_or_rotation();
 
-        printf("\n-> PHASE CHANGE: All %d items collected. Heading Home...\n", item_count);
+        printf("\n-> Fasbyte: Alla %d varor är upphämtade. Åker hem...\n", item_count);
     }
     log_next_action = true;
     route_changed   = true;
 }
 
+//procedur för att hämta vara 
 static void handle_pickup_state(long long elapsed_in_state) {
-    flag_timer = 0;
+    flag_timer = 0;     //nollställ timer när vi plockar en vara så att korsningen roboten står i inte detekteras igen
 
     if (sim_motor) {
         pickup_step_done = (aktivt_beslut == 'x' && elapsed_in_state >= 1500) ||
@@ -578,16 +549,20 @@ static void handle_pickup_state(long long elapsed_in_state) {
         poll_action_done(elapsed_in_state, &pickup_step_done);
     }
 
-    if (pickup_step_done && aktivt_beslut == 'x') {
-        // Steg 1 klar: skicka faktiskt pickup-kommando
+    if (pickup_step_done && aktivt_beslut == 'x') { //roboten har stannat och vi vill uppdatera beslut
         aktivt_beslut      = pickup_cmd;
         pickup_step_done   = false;
         action_timer_start = current_time_ms();
-        nasta_beslut = (current_item_index + 1 < item_count) ? 'f' : beslut_hem[0];
-        log_next_action    = true;
+       
+        if (current_item_index + 1 < item_count){   //åka vidare till nästa vara eller hem
+            nasta_beslut = 'f';
+        }else{
+            nasta_beslut = beslut_hem[0];
+        }
+        log_next_action = true;
+
     }
-    else if (pickup_step_done && (aktivt_beslut == 'v' || aktivt_beslut == 'h')) {
-        // Steg 2 klar: planera nästa fas
+    else if (pickup_step_done && (aktivt_beslut == 'v' || aktivt_beslut == 'h')) { //roboten har plockat vara och vi vill gå vidare
         is_picking_up    = false;
         current_item_index++;
         pickup_step_done = false;
@@ -595,11 +570,9 @@ static void handle_pickup_state(long long elapsed_in_state) {
     }
 }
 
-// =================================================================
-// DROP
-// =================================================================
+//procedur för att lämna vara
 static void handle_drop_state(long long elapsed_in_state) {
-    flag_timer = 0;
+    flag_timer = 0;     //reseta räknare för korsningsflagga så länge vi lämnar vara
 
     if (sim_motor) {
         drop_step_done = ((aktivt_beslut == 's' || aktivt_beslut == 'z') && elapsed_in_state >= 1500) ||
@@ -608,8 +581,7 @@ static void handle_drop_state(long long elapsed_in_state) {
         poll_action_done(elapsed_in_state, &drop_step_done);
     }
 
-    if (drop_step_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {
-        // Stoppet är klart, skicka drop-kommando
+    if (drop_step_done && (aktivt_beslut == 's' || aktivt_beslut == 'z')) {     //roboten har stannat och vi vill uppdatera beslut
         aktivt_beslut      = 'w';
         drop_step_done     = false;
         action_timer_start = current_time_ms();
@@ -617,9 +589,8 @@ static void handle_drop_state(long long elapsed_in_state) {
         log_next_action    = true;
     }
     else if (drop_step_done && aktivt_beslut == 'w') {
-        // Drop klar, allt är klart
         reset();
-        printf("\n=== AUTONOMOUS ROUTE COMPLETE ===\n\n");
+        printf("\nUPPDRAGET KLART!\n\n");
 
         unsigned char stop_pkt[PACKET_SIZE];
         build_motor_packet(stop_pkt, current_auto_state, false,
@@ -628,9 +599,7 @@ static void handle_drop_state(long long elapsed_in_state) {
     }
 }
 
-// =================================================================
-// INTERSECTION DETECTION + HANTERING
-// =================================================================
+//funktion som avgör om ny korsning ska triggas
 static bool detect_intersection(void) {
     if (sim_sensor) {
         if (sim_segment_timer > 0 && (current_time_ms() - sim_segment_timer) >= SIM_SEGMENT_MS) {
@@ -640,20 +609,19 @@ static bool detect_intersection(void) {
         return false;
     }
 
-    // Debounce: uppdatera temp_flag bara när värdet faktiskt ändras
-    if (flags_korsning != temp_flag) {
-        if (flag_timer > SLEEP/1500) {
-            bool real_intersection = (flags_korsning == 2);
-            bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X');
-            if (real_intersection || pickup_marker) {
-                flags_ny_korsning = 1;
+    if (flags_korsning != temp_flag) {  //om flags_korsning inte är samma som temp_flag
+        if (flag_timer > SLEEP/1500) {  //flag_timer måste uppnått ett visst värde så vi inte triggar samma korsning igen
+            bool real_intersection = (flags_korsning == 2);     //korsning (ej upphämtningsplats)
+            bool pickup_marker     = ((flags_korsning == 1 || flags_korsning == 3) && nasta_beslut == 'X'); //om nästa beslut är 'X' och flaggorna visar upphämtningsplats, aktivera pickup
+            if (real_intersection || pickup_marker) {   //om någon av korsningarna godkänns
+                flags_ny_korsning = 1;  //uppdatera flagga
             }
         }
-        temp_flag = flags_korsning;
+        temp_flag = flags_korsning;     //spara korsningstyp
     }
 
     bool triggered = false;
-    if (flags_ny_korsning && !korsning_aktiv) {
+    if (flags_ny_korsning && !korsning_aktiv) { //om ny korsning upptcäks och vi inte står i en korsning
         triggered         = true;
         korsning_aktiv    = 1;
         flags_ny_korsning = 0;
@@ -664,23 +632,22 @@ static bool detect_intersection(void) {
     }
     return triggered;
 }
-
+//hantera kornsing när den triggats
 static void handle_intersection(void) {
-    // Spara vad vi gjorde innan korsningen (t.ex. 'b' för backning)
-    char previous_action = aktivt_beslut;
+    char previous_action = aktivt_beslut; //spara beslutet så vi kan använda det senare
 
     current_action_index++;
-    aktivt_beslut_fn(current_action_index);
-    action_timer_start = current_time_ms();
+    aktivt_beslut_fn(current_action_index); 
+    action_timer_start = current_time_ms();     //börja timer för åtgärd
 
-    // Uppdatera aktuell nod och riktning
-    if (current_phase == PHASE_TO_ITEM) {
-        current_node = rutt_till_vara[current_action_index];
+
+    if (current_phase == PHASE_TO_ITEM) {  
+        current_node = rutt_till_vara[current_action_index];        //uppdatera aktuell nod
         if (rutt_till_vara[current_action_index + 1] != STOP) {
             current_dir = nodriktningsmatris[rutt_till_vara[current_action_index]]
                                             [rutt_till_vara[current_action_index + 1]];
         }
-    } else if (current_phase == PHASE_TO_HOME) {
+    } else if (current_phase == PHASE_TO_HOME) {    
         current_node = rutt_hem[current_action_index];
         if (rutt_hem[current_action_index + 1] != STOP) {
             current_dir = nodriktningsmatris[rutt_hem[current_action_index]]
@@ -691,7 +658,11 @@ static void handle_intersection(void) {
     if (aktivt_beslut == 'e' || aktivt_beslut == 'o') {
         is_rotating          = true;
         pending_rotation_cmd = aktivt_beslut;
-        aktivt_beslut        = (previous_action == 'b') ? 'z' : 's';
+        if (previous_action == 'b') {
+            aktivt_beslut = 'z';        //kommando för att roboten ska stanna när den backar (då sensorerna ligger för långt fram)
+        } else {
+            aktivt_beslut = 's';
+        }
         action_timer_start   = current_time_ms();
         log_next_action      = true;
     }
@@ -701,16 +672,20 @@ static void handle_intersection(void) {
             aktivt_beslut   = 'x';
             nasta_beslut    = pickup_cmd;
             is_picking_up   = true;
-            printf("\n-> Pickup item %d/%d...\n", current_item_index + 1, item_count);
+            printf("\n-> Plockar vara %d/%d...\n", current_item_index + 1, item_count);
             log_next_action = true;
         }
         else if (current_phase == PHASE_TO_HOME) {
             current_phase      = PHASE_DROP;
-            aktivt_beslut      = (previous_action == 'b') ? 'z' : 's';
+            if (previous_action == 'b') {
+                aktivt_beslut = 'z';        //kommando för att roboten ska stanna när den backar (då sensorerna ligger för långt fram)
+            } else {
+                aktivt_beslut = 's';
+            }
             nasta_beslut       = 'w';
             is_dropping        = true;
             action_timer_start = current_time_ms();
-            printf("\n-> Dropping basket at home...\n");
+            printf("\n-> Lämnar vara\n");
             log_next_action    = true;
         }
     }
@@ -723,14 +698,12 @@ static void handle_intersection(void) {
     }
 }
 
-// =================================================================
-// MOTORKOMMANDO
-// =================================================================
+//bygger och skickar paket till styr
 static void send_motor_command(void) {
     if (current_phase == PHASE_IDLE || aktivt_beslut == 'X') return;
 
     bool pickup_flag = (current_phase == PHASE_PICKUP && (aktivt_beslut == 'v' || aktivt_beslut == 'h')) ||
-                       (current_phase == PHASE_DROP   &&  aktivt_beslut == 'w');
+                       (current_phase == PHASE_DROP   &&  aktivt_beslut == 'w');       //flagga för plockande av vara
 
     unsigned char auto_packet[PACKET_SIZE];
     build_motor_packet(auto_packet, current_auto_state, pickup_flag,
@@ -739,12 +712,12 @@ static void send_motor_command(void) {
     if (!sim_motor) write(i2c_styr_fd, auto_packet, PACKET_SIZE);
 
     if (log_next_action) {
-        printf("Action updated to: '%c' (Sending to motors: '%c', Index: %d, Next: '%c')\n",
+        printf("Beslut uppdaterat till: '%c' (Skickar till styr: '%c', Index: %d, Nästa: '%c')\n",
                aktivt_beslut, auto_packet[3], current_action_index, nasta_beslut);
         log_next_action = false;
     }
 
-    static int blasting_log_counter = 0;
+    static int blasting_log_counter = 0;     //spammar loggen med packetinformation
     blasting_log_counter++;
     if (blasting_log_counter >= 50) {
         log_verification(auto_packet, auto_packet[3]);
@@ -752,35 +725,30 @@ static void send_motor_command(void) {
     }
 }
 
-// =================================================================
-// AUTONOMOUS STATE MACHINE (en tick)
-// =================================================================
+//ett tick i den autonoma tillståndsmaskinen
 static void run_autonomous_tick(void) {
     if (current_phase == PHASE_IDLE) return;
 
     long long elapsed_in_state = current_time_ms() - action_timer_start;
 
-    handle_obstacle();
+    handle_obstacle();  //hantera alltid hinder först
 
-    if (is_rotating) {
+    if (is_rotating) {  //annars kolla om vi roterar
         handle_rotation_state(elapsed_in_state);
     }
-    else if (is_picking_up) {
+    else if (is_picking_up) {   //annars kolla om vi ska ta upp vara
         handle_pickup_state(elapsed_in_state);
     }
-    else if (is_dropping) {
+    else if (is_dropping) {     //annars kolal om vi ska lämna vara
         handle_drop_state(elapsed_in_state);
     }
-    else if (detect_intersection()) {
+    else if (detect_intersection()) {   //om inget, kolla om korsning triggas
         handle_intersection();
     }
 
-    send_motor_command();
+    send_motor_command();   //skicka till styr
 }
 
-// =================================================================
-// TELEMETRY + ROUTE UPDATES TILL GUI
-// =================================================================
 static void send_telemetry(void) {
     if (!gui_known) return;
     telemetry_counter++;
@@ -809,11 +777,9 @@ static void send_route_update(void) {
            (struct sockaddr *)&cliaddr, sizeof(cliaddr));
 }
 
-// =================================================================
-// HUVUDPROGRAM
-// =================================================================
+//huvudprogrammet
 int main() {
-    init_karta();
+    init_karta(); 
 
     FILE *clr = fopen(VERIFY_LOG_FILE, "w");
     if (clr) fclose(clr);
@@ -830,9 +796,7 @@ int main() {
 
     sockfd = setup_udp_socket();
 
-    // =============================================================
-    // NON-BLOCKING MAIN LOOP (~500 Hz)
-    // =============================================================
+   
     while (1) {
         read_sensors();
         read_styr();
@@ -843,7 +807,7 @@ int main() {
 
         flag_timer++;
         hinder_timer++;
-        usleep(SLEEP);
+        usleep(SLEEP);  //detta ger att programmet körs i ungefär 40 Hz (max 40 Hz)
     }
 
     close(sockfd);

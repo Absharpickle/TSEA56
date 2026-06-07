@@ -1,100 +1,106 @@
+# ------------------------------------------------------
+# Markus Hellers, Joel Eberhardsson - 28 maj 2026 - V1.0
+# ------------------------------------------------------
+
+## Widget som ritar ut nodkartan i GUI:t ##
+
 from PyQt6.QtWidgets import QFrame
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QLineF, QPointF
 from PyQt6.QtGui import QPainter, QPen, QColor, QFont
 
 
+# MapFrame är en specialiserad QFrame som ritar ut nodkartan, markerar varor och visar den planerade rutten.
 class MapFrame(QFrame):
-    """Custom widget that draws the 5x5 node grid with edges, item highlights,
-    route visualization, and supports click-to-add-edge."""
 
-    edge_clicked = pyqtSignal(tuple)  # Emits (node_a, node_b) when an edge is clicked
+    edge_clicked = pyqtSignal(tuple)     # Signal som skickar (node_a, node_b) när en kant klickas
 
     def __init__(self, grid_nodes_ref, parent=None):
-        super().__init__(parent)
-        self.grid_nodes = grid_nodes_ref
-        self.highlighted_edges = []  # Item location edges: [(a, b), ...]
-        self.route_nodes = []        # Planned route node sequence: [25, 0, 1, ...]
+        super().__init__(parent)         # Initiera QFrame
+        self.grid_nodes = grid_nodes_ref # Referens till nodwidgets i MainWindow (för att få deras positioner)
+        self.highlighted_edges = []      # Lista över vilka kanter som ska markeras som varor
+        self.route_nodes = []            # Planerad rutt
         self.setStyleSheet("background-color: #1a252f; border: 2px solid #7f8c8d; border-radius: 5px;")
         self.setFixedSize(360, 360)
 
+    # Uppdatera och måla om kartan när varor sätts
     def set_item_edges(self, edges_list):
-        """Set the highlighted edges (item locations) and repaint."""
-        self.highlighted_edges = list(edges_list)
-        self.update()
+        self.highlighted_edges = list(edges_list) # Kopiera listan
+        self.update()                             # Måla om kartan med de nya varorna markerade
 
+    # Uppdatera och måla om kartan när en ny rutt planeras
     def set_route(self, node_list):
-        """Set the planned route node sequence and repaint."""
-        self.route_nodes = list(node_list)
-        self.update()
+        self.route_nodes = list(node_list) # Kopiera listan
+        self.update()                      # Måla om kartan med den nya rutten
 
+    # Hjälpfunktion för att få alla kanter i 5x5-griden plus startnoden (25-0)
     def _get_all_edges(self):
-        """Return all valid edges in the grid as (node_a, node_b) tuples."""
-        edges = []
+        edges = []                       # Lista över alla kanter i 5x5-griden plus startnoden
         for i in range(25):
-            kol = i % 5
-            rad = i // 5
+            kol = i % 5                  # Kolumnindex (0-4)
+            rad = i // 5                 # Radindex (0-4)
             if kol < 4:
-                edges.append((i, i + 1))
+                edges.append((i, i + 1)) # Kant till höger
             if rad < 4:
-                edges.append((i, i + 5))
-        edges.append((25, 0))  # Start node connection
+                edges.append((i, i + 5)) # Kant nedåt
+        edges.append((25, 0))            # Kant från startnoden till nod 0
         return edges
 
+    # Hjälpfunktion för att få centrumkoordinaterna för en nodwidget
     def _get_center(self, node_id):
-        """Get the center point of a node widget."""
-        if node_id not in self.grid_nodes:
-            return QPoint(0, 0)
-        widget = self.grid_nodes[node_id]
-        return widget.pos() + QPoint(widget.width() // 2, widget.height() // 2)
+        if node_id not in self.grid_nodes:                                      # Om noden inte finns i grid_nodes (ex startnod 25)...
+            return QPoint(0, 0)                                                 # ...returnera (0, 0) som en fallback (bör inte hända för giltiga noder)
+        widget = self.grid_nodes[node_id]                                       # Hämta nodwidgeten från grid_nodes
+        return widget.pos() + QPoint(widget.width() // 2, widget.height() // 2) # Beräkna centrumkoordinaterna för nodwidgeten
 
+    # Hantera klick på kartan
     def mousePressEvent(self, event):
-        """Detect clicks near edges and emit edge_clicked signal."""
-        if event.button() != Qt.MouseButton.LeftButton or len(self.grid_nodes) < 26:
-            super().mousePressEvent(event)
+        if event.button() != Qt.MouseButton.LeftButton or len(self.grid_nodes) < 26: # Endast hantera vänsterklick och se till att alla noder är laddade
+            super().mousePressEvent(event)                                           # Anropa standardhanteringen (för att inte blockera andra event) och returnera utan att göra något mer
             return
 
-        click = QPointF(event.pos())
+        click = QPointF(event.pos()) # Klickets position
         best_edge = None
-        best_dist = 20  # Max pixel distance from edge line to register a click
+        best_dist = 20               # Maxavstånd för att registrera ett klick
 
-        for a, b in self._get_all_edges():
-            p1 = QPointF(self._get_center(a))
-            p2 = QPointF(self._get_center(b))
-            line = QLineF(p1, p2)
+        for a, b in self._get_all_edges():    # Loop över alla kanter i 5x5-griden plus startnoden
+            p1 = QPointF(self._get_center(a)) # Få centrumkoordinaterna för nod a
+            p2 = QPointF(self._get_center(b)) # Få centrumkoordinaterna för nod b
+            line = QLineF(p1, p2)             # Linje för kanten mellan nod a och nod b
 
-            # Project click onto the line segment, reject if outside endpoints
+            # Beräkna avståndet från klicket till linjen (kanten) och hitta den närmaste kanten inom ett visst avstånd
             length = line.length()
             if length < 1:
                 continue
             
-            # Parametric position along line (0..1)
-            dx, dy = p2.x() - p1.x(), p2.y() - p1.y()
-            t = ((click.x() - p1.x()) * dx + (click.y() - p1.y()) * dy) / (length * length)
-            t = max(0.1, min(0.9, t))  # Exclude near-node clicks (avoid ambiguity)
+            # Projektion av klicket på linjen för att hitta den närmaste punkten på kanten
+            dx, dy = p2.x() - p1.x(), p2.y() - p1.y()                                       # Riktning av linjen
+            t = ((click.x() - p1.x()) * dx + (click.y() - p1.y()) * dy) / (length * length) # Projektionens t-värde längs linjen
+            t = max(0.1, min(0.9, t))                                                       # Begränsa t så att den inte är för nära noderna
             
-            # Closest point on segment
+            # Närmaste punkten på linjen från klicket
             closest = QPointF(p1.x() + t * dx, p1.y() + t * dy)
             dist = QLineF(click, closest).length()
             
-            if dist < best_dist:
-                best_dist = dist
-                best_edge = (a, b)
+            if dist < best_dist:    # Om detta är den närmaste kanten hittills inom det tillåtna avståndet...
+                best_dist = dist    # ...uppdatera bästa avståndet...
+                best_edge = (a, b)  # ...och spara den bästa kanten (a, b)
 
-        if best_edge:
-            self.edge_clicked.emit(best_edge)
+        if best_edge:                         # Om en giltig kant hittades inom det tillåtna avståndet...
+            self.edge_clicked.emit(best_edge) # ...skicka signalen edge_clicked med den klickade kanten (a, b)
 
         super().mousePressEvent(event)
 
+    # Rita ut kartan, den planerade rutten och markerade varor
     def paintEvent(self, event):
         super().paintEvent(event)
         
         if not self.grid_nodes or len(self.grid_nodes) < 26:
             return
 
-        painter = QPainter(self)
+        painter = QPainter(self) # Skapa en QPainter för att rita på widgeten
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # --- Layer 1: Base grid edges (dark) ---
+        # --- Lager 1 - Nodkartan ---
         pen = QPen(QColor("#2c3e50"), 6)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
@@ -107,7 +113,7 @@ class MapFrame(QFrame):
                 painter.drawLine(self._get_center(i), self._get_center(i + 5))
         painter.drawLine(self._get_center(25), self._get_center(0))
 
-        # --- Layer 2: Planned route (cyan, drawn under items) ---
+        # --- Lager 2 - Planerad rutt ---
         if self.route_nodes and len(self.route_nodes) >= 2:
             route_pen = QPen(QColor("#00bcd4"), 5, Qt.PenStyle.SolidLine)
             route_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -117,7 +123,7 @@ class MapFrame(QFrame):
                 if a in self.grid_nodes and b in self.grid_nodes:
                     painter.drawLine(self._get_center(a), self._get_center(b))
 
-        # --- Layer 3: Item edges (orange with order numbers) ---
+        # --- Lager 3 - Markerade varor ---
         if self.highlighted_edges:
             highlight_pen = QPen(QColor("#e67e22"), 8)
             highlight_pen.setCapStyle(Qt.PenCapStyle.RoundCap)

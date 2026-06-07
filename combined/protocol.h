@@ -1,3 +1,7 @@
+// ------------------------------------------------------
+// Markus Hellers, Joel Eberhardsson - 28 maj 2026 - V1.0
+// ------------------------------------------------------
+
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
@@ -5,7 +9,7 @@
 #include <stdbool.h>
 #include "pathfinding.h"
 
-// --- COMMUNICATION DEFINITIONS ---
+// --- KOMMUNIKATIONSDEFINITIONER ---
 #define UDP_PORT 5001
 #define BUFFER_SIZE 1024
 #define I2C_DEVICE "/dev/i2c-1"
@@ -18,7 +22,7 @@
 // PARSED PACKET STRUCTS
 // =================================================================
 
-// 0x05 Command packet from GUI
+// 0x05 Kommandopaket från GUI
 typedef struct {
     bool     valid;   // true om paketet är giltigt
     uint8_t  state;   // 0x00–0x03 (körläge)
@@ -26,7 +30,7 @@ typedef struct {
     char     action;  // ASCII-kommando eller arm-byte (bits 0-5=joint, 6-7=dir)
 } CommandPacket;
 
-// 0x07 Item list packet from GUI
+// 0x07 Paket med varulista från GUI
 typedef struct {
     bool    valid;
     int     count;                // Antal giltiga varor
@@ -34,54 +38,54 @@ typedef struct {
     uint8_t items_v[MAX_ITEMS];   // Nod V per vara
 } ItemListPacket;
 
-// Styrmodul I2C response
+// Styrmodulssvar
 typedef struct {
     bool    valid;
-    uint8_t gas_right;
-    uint8_t gas_left;
-    int8_t  claw_pos_r;
-    int8_t  claw_pos_z;
-    uint8_t action_done;  // 1 = åtgärden är klar
+    uint8_t gas_right;            // Höger gaspådrag
+    uint8_t gas_left;             // Vänster gaspådrag
+    int8_t  claw_pos_r;           // Klons position i förhållande till basen
+    int8_t  claw_pos_z;           // Klons position i z-led
+    uint8_t action_done;          // 1 = åtgärden är klar
 } StyrResponse;
 
-// Sensor I2C data
+// Sensorpaket
 typedef struct {
-    uint8_t flags;
-    uint8_t line_var_f;
-    uint8_t line_var_b;
-    uint8_t angle;
-    uint8_t ir;
+    uint8_t flags;                // Statusflaggor
+    uint8_t line_var_f;           // Värde från främre linjesensor
+    uint8_t line_var_b;           // Värde från bakre linjesensor
+    uint8_t angle;                // Vinkel mellan sensorerna
+    uint8_t ir;                   // IR-sensor
     uint8_t gyro1;
     uint8_t gyro2;
 } SensorData;
 
 // =================================================================
-// PARSING: Inkommande paket
+// INKOMMANDE PAKET
 // =================================================================
 
-// Parsa ett 0x05-kommandopaket. Returnerar .valid = false om ogiltigt.
+// Parsa ett 0x05-kommandopaket. Returnerar .valid = false om ogiltigt
 CommandPacket parse_command_packet(const unsigned char *buf, int n);
 
-// Parsa ett 0x07-varulistepaket. Validerar kanter mot kartgrafen.
+// Parsa ett 0x07-varulistepaket. Validerar kanter mot kartgrafen
 ItemListPacket parse_item_list_packet(const unsigned char *buf, int n);
 
-// Parsa I2C-svar från styrmodul (0x12). Returnerar action_done-flaggan.
+// Parsa svar från styrmodul (0x12). Returnerar action_done-flaggan
 StyrResponse parse_styr_response(const unsigned char *buf, int n);
 
-// Parsa sensorpaket (0x10) till struct.
+// Parsa sensorpaket (0x10)
 SensorData parse_sensor_packet(const unsigned char *buf);
 
 // =================================================================
-// BUILDING: Utgående paket
+// UTGÅENDE PAKET
 // =================================================================
 
-// Bygg ett 8-byte motorkommando för I2C till styrmodul.
+// Bygg ett 8-byte motorkommando till styrmodul
 void build_motor_packet(unsigned char out[PACKET_SIZE],
                         uint8_t state, bool is_pickup,
                         char command,
                         uint8_t line_var_f, uint8_t line_var_b, uint8_t gyro1, uint8_t gyro2);
 
-// Bygg ett 18-byte telemetripaket (0x06) för UDP till GUI.
+// Bygg ett 18-byte telemetripaket (0x06) till GUI
 void build_telemetry_packet(unsigned char out[PACKET_SIZE + 10],
                             uint8_t phase, char action, char next_action,
                             uint8_t line_var_f, uint8_t gyro1, uint8_t gyro2,
@@ -91,8 +95,8 @@ void build_telemetry_packet(unsigned char out[PACKET_SIZE + 10],
                             uint8_t gas_right, uint8_t gas_left,
                             int8_t claw_pos_r, int8_t claw_pos_z);
 
-// Bygg ett variabellängt ruttpaket (0x08) för UDP till GUI.
-// Returnerar paketlängden.
+// Bygg ett variabellängt ruttpaket (0x08) till GUI
+// Returnerar paketlängden
 int build_route_packet(unsigned char *out, const int *route, int max_nodes);
 
 // =================================================================
