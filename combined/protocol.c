@@ -11,7 +11,7 @@
 // INKOMMANDE PAKET
 // =================================================================
 
-// Parsa ett 0x05-kommandopaket
+// Parsa 0x05-kommandopaket
 CommandPacket parse_command_packet(const unsigned char *buf, int n) {
     CommandPacket pkt = { .valid = false };
     if (n == PACKET_SIZE && buf[0] == 0x05) {
@@ -23,7 +23,7 @@ CommandPacket parse_command_packet(const unsigned char *buf, int n) {
     return pkt;
 }
 
-// Parsa ett varupaket
+// Parsa varupaket
 ItemListPacket parse_item_list_packet(const unsigned char *buf, int n) {
     ItemListPacket pkt = { .valid = false, .count = 0 };
     if (n < 4 || buf[0] != 0x07) return pkt;
@@ -31,7 +31,7 @@ ItemListPacket parse_item_list_packet(const unsigned char *buf, int n) {
     int num = buf[1];
     int expected_len = 3 + 2 * num;
     if (num <= 0 || num > MAX_ITEMS || n != expected_len || buf[n - 1] != 0xFF) {
-        printf("[!] Invalid item-list packet (n=%d, count=%d)\n", n, num);
+        printf("[!] Ogiltigt paket (n=%d, count=%d)\n", n, num);
         return pkt;
     }
 
@@ -44,7 +44,7 @@ ItemListPacket parse_item_list_packet(const unsigned char *buf, int n) {
             pkt.items_v[pkt.count] = iv;
             pkt.count++;
         } else {
-            printf("[!] Skipping invalid item edge (%d, %d)\n", iu, iv);
+            printf("[!] Hoppar över ogiltig vara %d, %d\n", iu, iv);
         }
     }
     return pkt;
@@ -55,11 +55,11 @@ StyrResponse parse_styr_response(const unsigned char *buf, int n) {
     StyrResponse resp = { .valid = false, .action_done = 0 };
     if (n == PACKET_SIZE) {
         resp.valid       = true;
-        resp.gas_right   = buf[0];
-        resp.gas_left    = buf[1];
-        resp.claw_pos_r  = buf[2];
-        resp.claw_pos_z  = buf[3];
-        resp.action_done = buf[4]; // Byte 4: action_done flagga
+        resp.gas_right   = buf[0];  // Höger gaspådrag
+        resp.gas_left    = buf[1];  // Vänster gaspådrag
+        resp.claw_pos_r  = buf[2];  // Klons position i r-led
+        resp.claw_pos_z  = buf[3];  // Klons position i z-led
+        resp.action_done = buf[4];  // Action_done flagga
     }
     return resp;
 }
@@ -67,13 +67,13 @@ StyrResponse parse_styr_response(const unsigned char *buf, int n) {
 // Parsa sensorpaket
 SensorData parse_sensor_packet(const unsigned char *buf) {
     SensorData s;
-    s.flags    = buf[0];
-    s.line_var_f = buf[1];
-    s.line_var_b = buf[2];
-    s.angle    = buf[3];
-    s.ir       = buf[5];
-    s.gyro1    = buf[6];
-    s.gyro2    = buf[7];
+    s.flags    = buf[0];        // Flaggor
+    s.line_var_f = buf[1];      // Linjevar fram
+    s.line_var_b = buf[2];      // Linjevar bak
+    s.angle    = buf[3];        // Vinkel mellan sensorerna
+    s.ir       = buf[5];        // IR
+    s.gyro1    = buf[6];        // Gyro 1
+    s.gyro2    = buf[7];        // Gyro 2
     return s;
 }
 
